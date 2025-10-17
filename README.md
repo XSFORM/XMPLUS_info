@@ -12,49 +12,34 @@ Telegram expiry-notifier bot (XMPLUS) — репозиторий для разв
 
 ## Автоустановка (одной командой)
 
+Если Docker и Git уже установлены:
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/XSFORM/XMPLUS/main/install.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/XSFORM/XMPLUS_info/main/install.sh)"
+```
+
+Полная автоустановка на чистой Ubuntu/Debian (поставит curl, git, Docker и запустит скрипт):
+```bash
+bash -c 'set -e; apt-get update; apt-get install -y curl git; curl -fsSL https://get.docker.com | sh; curl -fsSL https://raw.githubusercontent.com/XSFORM/XMPLUS_info/main/install.sh | bash'
 ```
 
 Скрипт:
 - установит/обновит код в `/opt/xmplus`,
 - спросит `BOT_TOKEN` и `OWNER_CHAT_ID`,
 - создаст `.env`,
-- запустит контейнеры `docker compose up --build -d`.
+- соберёт и запустит контейнеры через Docker Compose.
 
-Логи: 
+Логи:
 ```bash
 cd /opt/xmplus && docker compose logs -f xmplus
 ```
 (если у вас классический docker-compose — замените на `docker-compose logs -f xmplus`)
 
-## Ручной запуск (если без скрипта)
-1) Создать `.env` (см. `.env.example`), важные переменные:
-```
-BOT_TOKEN=...
-OWNER_CHAT_ID=...
-TIMEZONE=Europe/Moscow
-DATABASE_URL=sqlite+aiosqlite:///./data/data.db
-```
-
-2) Собрать и запустить:
-```bash
-docker compose up --build -d
-```
-
 ## Команды бота (в меню Telegram)
-Бот регистрирует команды через Bot API, они появляются в «кнопке меню» (иконка с точками в Telegram):
+Бот регистрирует команды через Bot API — они появляются в «кнопке меню» (иконка с точками в Telegram):
 - `/start` — запуск бота
 - `/help` — справка по командам
-- `/add` — добавить запись (заглушка)
-- `/list` — список записей (заглушка)
-- `/remove` — удалить запись (заглушка)
-- `/import` — импорт CSV (заглушка)
-- `/export` — экспорт CSV (заглушка)
-- `/next` — ближайшие истечения (заглушка)
-- `/status` — статус бота
-- `/settings` — настройки (заглушка)
+- `/add`, `/list`, `/remove`, `/import`, `/export`, `/next`, `/status`, `/settings` — заготовки под функционал
 
 ## Примечания
-- По умолчанию используется SQLite в `./data/data.db`. Можно заменить на Postgres, указав `DATABASE_URL=postgresql+psycopg://user:pass@host:5432/dbname`.
-- Если увидите предупреждение в `docker compose` про ключ `version` в `docker-compose.yml` — его можно удалить, это устаревший синтаксис и не влияет на работу.
+- По умолчанию используется SQLite `./data/data.db`. Можно заменить на Postgres, указав `DATABASE_URL=postgresql+psycopg://user:pass@host:5432/dbname`.
+- Предупреждение про устаревший ключ `version` в `docker-compose.yml` можно игнорировать или удалить строку `version:` из файла.

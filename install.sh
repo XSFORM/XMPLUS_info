@@ -1,24 +1,92 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_URL="https://github.com/XSFORM/XMPLUS.git"
+REPO_URL="https://github.com/XSFORM/XMPLUS_info.git"
 INSTALL_DIR="/opt/xmplus"
 
 need() { command -v "$1" >/dev/null 2>&1; }
 
-detect_compose() {
-  if need docker && docker compose version >/dev/null 2>&1; then
-    echo "docker compose"
-  elif need docker-compose; then
-    echo "docker-compose"
+ensure_root() {
+  if [ "${EUID:-$(id -u)}" -ne 0 ]; then
+    echo "Please run as root (sudo)." >&2
+    exit 1
+  fi
+}
+
+detect_pkg_mgr() {
+  if command -v apt-get >/dev/null 2>&1; then
+    echo "apt"
+  elif command -v dnf >/dev/null 2>&1; then
+    echo "dnf"
+  elif command -v yum >/dev/null 2>&1; then
+    echo "yum"
   else
     echo ""
   fi
 }
 
-ensure_root() {
-  if [ "${EUID:-$(id -u)}" -ne 0 ]; then
-    echo "Please run as root (sudo)." >&2
+pkg_install() {
+  local mgr="$1"; shift
+  case "$mgr" in
+    apt) DEBIAN_FRONTEND=noninteractive apt-get update -y && apt-get install -y "$@" ;;
+    dnf) dnf install -y "$@" ;;
+    yum) yum install -y "$@" ;;
+    *) return 1 ;;
+  esac
+}
+
+ensure_basics() {
+  local mgr
+  mgr=$(detect_pkg_mgr)
+  if [ -n "$mgr" ]; then
+    need curl || pkg_install "$mgr" curl
+    need git  || pkg_install "$mgr" git
+  else
+    # Без пакетного менеджера просто проверим наличие
+    need curl || { echo "curl is required"; exit 1; }
+    need git  || { echo "git is required"; exit 1; }
+  fi
+}
+
+ensure_docker() {
+  if need docker; then
+    return
+  fi
+  echo "[*] Docker not found. Installing via get.docker.com ..."
+  curl -fsSL https://get.docker.com | sh
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl enable --now docker || true
+  fi
+  if ! need docker; then
+    echo "Docker installation failed. Install Docker manually and re-run." >&2
+    exit 1
+  fi
+}
+
+ensure_compose() {
+  # Нужен либо docker compose (плагин), либо docker-compose (классический)
+  if docker compose version >/dev/null 2>&1; then
+    return
+  fi
+  if need docker-compose; then
+    return
+  fi
+
+  local mgr
+  mgr=$(detect_pkg_mgr)
+  if [ -n "$mgr" ]; then
+    echo "[*] Installing docker compose plugin ..."
+    # Попытка поставить плагин
+    pkg_install "$mgr" docker-compose-plugin || true
+    if docker compose version >/dev/null 2>&1; then
+      return
+    fi
+    echo "[*] Installing legacy docker-compose ..."
+    pkg_install "$mgr" docker-compose || true
+  fi
+
+  if ! docker compose version >/dev/null 2>&1 && ! need docker-compose; then
+    echo "Docker Compose not found. Please install docker compose plugin or docker-compose." >&2
     exit 1
   fi
 }
@@ -47,7 +115,6 @@ prompt_env() {
   DEALER_NAME=${DEALER_NAME:-main}
   TIMEZONE=${TIMEZONE:-Europe/Moscow}
 
-  # Значения по умолчанию; можно потом изменить в .env
   CHECK_INTERVAL_MINUTES=${CHECK_INTERVAL_MINUTES:-1}
   NOTIFY_EVERY_MINUTES=${NOTIFY_EVERY_MINUTES:-180}
   MAX_NOTIFICATIONS=${MAX_NOTIFICATIONS:-9}
@@ -69,32 +136,30 @@ EOF
 }
 
 run_compose() {
-  local compose_bin
-  compose_bin=$(detect_compose)
-  if [ -z "$compose_bin" ]; then
-    echo "Docker Compose not found. Please install Docker and Compose plugin (or docker-compose)." >&2
-    exit 1
-  fi
-
   mkdir -p "$INSTALL_DIR/data"
 
-  echo "[*] Building and starting services..."
-  if [ "$compose_bin" = "docker compose" ]; then
+  if docker compose version >/dev/null 2>&1; then
+    echo "[*] Building and starting services with docker compose..."
     (cd "$INSTALL_DIR" && docker compose up --build -d)
   else
+    echo "[*] Building and starting services with docker-compose..."
     (cd "$INSTALL_DIR" && docker-compose up --build -d)
   fi
 
   echo
   echo "=== Done ==="
-  echo "View logs:  cd $INSTALL_DIR && $compose_bin logs -f xmplus"
+  if docker compose version >/dev/null 2>&1; then
+    echo "View logs:  cd $INSTALL_DIR && docker compose logs -f xmplus"
+  else
+    echo "View logs:  cd $INSTALL_DIR && docker-compose logs -f xmplus"
+  fi
 }
 
 main() {
   ensure_root
-  need git || { echo "git is required"; exit 1; }
-  need docker || { echo "docker is required"; exit 1; }
-
+  ensure_basics
+  ensure_docker
+  ensure_compose
   clone_or_update_repo
   prompt_env
   run_compose
