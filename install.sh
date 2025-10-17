@@ -42,7 +42,6 @@ ensure_basics() {
     need curl || pkg_install "$mgr" curl
     need git  || pkg_install "$mgr" git
   else
-    # Без пакетного менеджера просто проверим наличие
     need curl || { echo "curl is required"; exit 1; }
     need git  || { echo "git is required"; exit 1; }
   fi
@@ -64,7 +63,6 @@ ensure_docker() {
 }
 
 ensure_compose() {
-  # Нужен либо docker compose (плагин), либо docker-compose (классический)
   if docker compose version >/dev/null 2>&1; then
     return
   fi
@@ -76,7 +74,6 @@ ensure_compose() {
   mgr=$(detect_pkg_mgr)
   if [ -n "$mgr" ]; then
     echo "[*] Installing docker compose plugin ..."
-    # Попытка поставить плагин
     pkg_install "$mgr" docker-compose-plugin || true
     if docker compose version >/dev/null 2>&1; then
       return
@@ -104,16 +101,46 @@ clone_or_update_repo() {
   fi
 }
 
+# Универсальный вопрос: читает из /dev/tty, чтобы работать даже при "curl ... | bash"
+ask() {
+  # usage: ask "Prompt: " VAR [default]
+  local prompt="$1"; shift
+  local __var="$1"; shift
+  local def="${1:-}"
+
+  local input=""
+  if [ -t 0 ]; then
+    read -rp "$prompt" input
+  else
+    # читаем из терминала, даже если stdin — это pipe
+    read -rp "$prompt" input </dev/tty
+  fi
+
+  if [ -z "$input" ] && [ -n "$def" ]; then
+    printf -v "$__var" "%s" "$def"
+  else
+    printf -v "$__var" "%s" "$input"
+  fi
+}
+
 prompt_env() {
   echo
   echo "=== XMPLUS configuration ==="
-  read -rp "Enter BOT_TOKEN: " BOT_TOKEN
-  read -rp "Enter OWNER_CHAT_ID (numeric, optional, just ENTER to skip): " OWNER_CHAT_ID || true
-  read -rp "Dealer name [main]: " DEALER_NAME || true
-  read -rp "Timezone [Europe/Moscow]: " TIMEZONE || true
 
-  DEALER_NAME=${DEALER_NAME:-main}
-  TIMEZONE=${TIMEZONE:-Europe/Moscow}
+  # Разрешаем передать заранее через переменные окружения, иначе спросим
+  BOT_TOKEN=${BOT_TOKEN:-}
+  OWNER_CHAT_ID=${OWNER_CHAT_ID:-}
+  DEALER_NAME=${DEALER_NAME:-}
+  TIMEZONE=${TIMEZONE:-}
+
+  if [ -z "$BOT_TOKEN" ]; then
+    ask "Enter BOT_TOKEN: " BOT_TOKEN
+  fi
+  if [ -z "${OWNER_CHAT_ID:-}" ]; then
+    ask "Enter OWNER_CHAT_ID (numeric, optional, just ENTER to skip): " OWNER_CHAT_ID
+  fi
+  ask "Dealer name [main]: " DEALER_NAME "main"
+  ask "Timezone [Europe/Moscow]: " TIMEZONE "Europe/Moscow"
 
   CHECK_INTERVAL_MINUTES=${CHECK_INTERVAL_MINUTES:-1}
   NOTIFY_EVERY_MINUTES=${NOTIFY_EVERY_MINUTES:-180}
