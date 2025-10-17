@@ -1,0 +1,15 @@
+[Unit]
+Description=XMPLUS Expiry Notifier Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/youruser/XMPLUS_info
+EnvironmentFile=/home/youruser/XMPLUS_info/.env
+ExecStart=/home/youruser/XMPLUS_info/.venv/bin/python -m app.main
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
