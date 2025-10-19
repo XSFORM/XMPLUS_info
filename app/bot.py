@@ -119,7 +119,7 @@ async def add_start(message: Message, state: FSMContext) -> None:
     await message.answer("Шаг 1/3. Введите USER ID (число):", reply_markup=main_menu_kb())
 
 
-@router.message(AddStates.waiting_user_id))
+@router.message(AddStates.waiting_user_id)
 async def add_user_id(message: Message, state: FSMContext) -> None:
     text = (message.text or "").strip()
     if not text.isdigit():
