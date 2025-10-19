@@ -15,7 +15,6 @@ from app.utils import parse_datetime_human, fmt_dt_human
 
 router = Router()
 
-# Команды для кнопки меню
 BOT_COMMANDS = [
     BotCommand(command="start", description="Запуск бота"),
     BotCommand(command="help", description="Справка по командам"),
@@ -52,8 +51,6 @@ async def on_status(message: Message) -> None:
         total = (await session.execute(select(Item))).scalars().unique().all()
         await message.answer(f"Бот работает ✅\nВ базе записей: {len(total)}")
 
-
-# ==== Мастер добавления: USERID -> USERNAME -> DUE DATETIME ====
 
 class AddStates(StatesGroup):
     waiting_user_id = State()
@@ -95,7 +92,11 @@ async def add_username(message: Message, state: FSMContext) -> None:
     await state.set_state(AddStates.waiting_duedatetime)
     await message.answer(
         "Шаг 3/3. Введите дату и время отключения (DUE DATE/TIME).\n"
-        "Примеры: 2025-11-06 15:35:43, 31.01.2026 04:39, 2026-01-15 04:27:09"
+        "Примеры форматов:\n"
+        "• 2025-11-06 15:35:43\n"
+        "• 31.01.2026 04:39\n"
+        "• 2025-11-06\n"
+        "• 31.01.2026"
     )
 
 
@@ -105,7 +106,12 @@ async def add_duedatetime(message: Message, state: FSMContext) -> None:
     dt = parse_datetime_human(text)
     if not dt:
         await message.answer(
-            "Не смог распарсить дату/время. Примеры: 2025-11-06 15:35:43, 31.01.2026 04:39.\n"
+            "Не смог распарсить дату/время.\n"
+            "Примеры:\n"
+            "• 2025-11-06 15:35:43\n"
+            "• 31.01.2026 04:39\n"
+            "• 2025-11-06\n"
+            "• 31.01.2026\n"
             "Попробуйте ещё раз или /cancel."
         )
         return
@@ -129,50 +135,3 @@ async def add_duedatetime(message: Message, state: FSMContext) -> None:
     await message.answer(
         f"Добавлено: [{item.id}] USERID={user_id}, USERNAME={username}, DUE={fmt_dt_human(dt)}"
     )
-
-
-# ==== Прочие команды ====
-
-@router.message(Command("list"))
-async def on_list(message: Message) -> None:
-    async with SessionLocal() as session:
-        result = await session.execute(select(Item).order_by(Item.due_date.asc()))
-        items = result.scalars().all()
-
-    if not items:
-        await message.answer("Список пуст.")
-        return
-
-    # Компактная табличка
-    lines = [f"[{it.id}] {it.user_id} | {it.username} | {fmt_dt_human(it.due_date)}" for it in items]
-    header = "ID | USERID | USERNAME | DUE DATE\n" + "-" * 40
-    await message.answer(header + "\n" + "\n".join(lines))
-
-
-@router.message(Command("remove"))
-async def on_remove(message: Message) -> None:
-    parts = (message.text or "").split()
-    if len(parts) != 2 or not parts[1].isdigit():
-        await message.answer("Использование: /remove <id>")
-        return
-    item_id = int(parts[1])
-
-    async with SessionLocal() as session:
-        await session.execute(delete(Item).where(Item.id == item_id))
-        await session.commit()
-
-    await message.answer(f"Удалено (если было): id={item_id}")
-
-
-@router.message(Command("next"))
-async def on_next(message: Message) -> None:
-    async with SessionLocal() as session:
-        result = await session.execute(select(Item).order_by(Item.due_date.asc()).limit(10))
-        items = result.scalars().all()
-
-    if not items:
-        await message.answer("Нет ближайших истечений.")
-        return
-
-    lines = [f"[{it.id}] {it.user_id} | {it.username} | {fmt_dt_human(it.due_date)}" for it in items]
-    await message.answer("Ближайшие:\n" + "\n".join(lines))

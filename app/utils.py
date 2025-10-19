@@ -14,9 +14,6 @@ def now_tz() -> datetime:
 
 
 def to_tz(dt: datetime) -> datetime:
-    """
-    Делает datetime timezone-aware в таймзоне настроек, если он naive.
-    """
     tz = pytz.timezone(settings.TIMEZONE)
     if dt.tzinfo is None:
         return tz.localize(dt)
@@ -24,67 +21,51 @@ def to_tz(dt: datetime) -> datetime:
 
 
 def _clean_dt_text(text: str) -> str:
-    """
-    Нормализует строку даты/времени:
-    - заменяет неразрывные/тонкие пробелы на обычный
-    - убирает повторяющиеся пробелы
-    - нормализует тире к дефису (на всякий случай)
-    """
+    # Нормализуем экзотические пробелы/тире
     s = str(text)
     s = (
-        s.replace("\u00A0", " ")   # NBSP
-         .replace("\u202F", " ")   # NARROW NBSP
-         .replace("\u2009", " ")   # THIN SPACE
+        s.replace("\u00A0", " ")
+         .replace("\u202F", " ")
+         .replace("\u2009", " ")
          .replace("\u2002", " ")
          .replace("\u2003", " ")
     )
-    s = re.sub(r"[–—−]", "-", s)   # en/em dash → hyphen-minus
+    s = re.sub(r"[–—−]", "-", s)
     s = re.sub(r"\s+", " ", s).strip()
     return s
 
 
-def _try_strptime(s: str) -> datetime | None:
-    """
-    Строгие форматы, которые ожидаем чаще всего.
-    """
-    fmts = [
-        "%Y-%m-%d %H:%M:%S",
-        "%Y-%m-%d %H:%M",
-        "%d.%m.%Y %H:%M:%S",
-        "%d.%m.%Y %H:%M",
-        "%Y-%m-%d",
-        "%d.%m.%Y",
-    ]
-    for fmt in fmts:
-        try:
-            dt = datetime.strptime(s, fmt)
-            return to_tz(dt)
-        except ValueError:
-            continue
-    return None
-
-
 def parse_datetime_human(text: str) -> datetime | None:
     """
-    Гибкий парсер даты/времени.
-    1) Пытаемся строгие форматы:
-       - YYYY-MM-DD HH:MM:SS
-       - YYYY-MM-DD HH:MM
-       - DD.MM.YYYY HH:MM:SS
-       - DD.MM.YYYY HH:MM
-       - YYYY-MM-DD
-       - DD.MM.YYYY
-    2) Если не получилось — используем dateutil.parse с dayfirst=True.
-       Если время опущено, берём 00:00:00 локальной TZ.
+    Жёсткий парсер:
+    - YYYY-MM-DD HH:MM[:SS]
+    - DD.MM.YYYY HH:MM[:SS]
+    - YYYY-MM-DD (время = 00:00:00)
+    - DD.MM.YYYY (время = 00:00:00)
+    Если не распознали — fallback на dateutil.parse (dayfirst=True).
     """
     s = _clean_dt_text(text)
 
-    dt = _try_strptime(s)
-    if dt:
-        return dt
+    # 1) ISO: 2025-10-20 22:35 или 22:35:43
+    m = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?", s)
+    if m:
+        y, mo, d = map(int, m.group(1, 2, 3))
+        hh = int(m.group(4) or 0)
+        mm = int(m.group(5) or 0)
+        ss = int(m.group(6) or 0)
+        return to_tz(datetime(y, mo, d, hh, mm, ss))
 
+    # 2) DMY: 31.01.2026 04:39 или 04:39:05
+    m = re.fullmatch(r"(\d{2})\.(\d{2})\.(\d{4})(?:\s+(\d{2}):(\d{2})(?::(\d{2}))?)?", s)
+    if m:
+        d, mo, y = map(int, m.group(1, 2, 3))
+        hh = int(m.group(4) or 0)
+        mm = int(m.group(5) or 0)
+        ss = int(m.group(6) or 0)
+        return to_tz(datetime(y, mo, d, hh, mm, ss))
+
+    # 3) Fallback: dateutil (на случай «чудо-строк»)
     try:
-        # default задаёт время по умолчанию, если в строке нет времени
         base = datetime(2000, 1, 1, 0, 0, 0)
         dt2 = parser.parse(s, dayfirst=True, yearfirst=False, fuzzy=True, default=base)
         return to_tz(dt2)
