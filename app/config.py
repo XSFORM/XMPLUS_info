@@ -12,7 +12,7 @@ class Settings:
     DEALER_NAME: str = os.getenv("DEALER_NAME", "main")
     TIMEZONE: str = os.getenv("TIMEZONE", "Europe/Moscow")
 
-    # Интервалы и лимиты (то, что уже использовалось в compose)
+    # Интервалы и лимиты
     CHECK_INTERVAL_MINUTES: int = int(os.getenv("CHECK_INTERVAL_MINUTES", "1"))
     NOTIFY_EVERY_MINUTES: int = int(os.getenv("NOTIFY_EVERY_MINUTES", "180"))
     MAX_NOTIFICATIONS: int = int(os.getenv("MAX_NOTIFICATIONS", "9"))
