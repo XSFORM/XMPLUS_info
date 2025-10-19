@@ -18,15 +18,16 @@ class Item(Base):
     __tablename__ = "items"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    title: Mapped[str] = mapped_column(String(255))
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    chat_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
-    # Переопределение глобальных настроек (если заданы)
+    # Новые поля под вашу таблицу
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    username: Mapped[str] = mapped_column(String(255), nullable=False)
+    due_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    # Служебные
+    chat_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     notify_every_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     max_notifications: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-
-    # Учёт отправок
     notified_count: Mapped[int] = mapped_column(Integer, default=0)
     last_notified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
