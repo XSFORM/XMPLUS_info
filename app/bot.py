@@ -70,8 +70,15 @@ def confirm_kb() -> ReplyKeyboardMarkup:
     )
 
 
+async def set_bot_commands(bot: Bot) -> None:
+    await bot.set_my_commands(commands=BOT_COMMANDS, scope=BotCommandScopeDefault())
+    try:
+        await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+    except Exception:
+        pass
+
+
 def choose_by_due_kb(prefix: str, items: list[Item], extra_row: list[InlineKeyboardButton] | None = None) -> InlineKeyboardMarkup:
-    # Кнопки выбора по дате (без показа ID)
     buttons = []
     for it in items:
         label = f"{fmt_dt_human(it.due_date)} • {it.username}"
@@ -82,20 +89,10 @@ def choose_by_due_kb(prefix: str, items: list[Item], extra_row: list[InlineKeybo
 
 
 def date_copy_kb(date_str: str) -> InlineKeyboardMarkup:
-    # Кнопки для удобного копирования/вставки даты
-    # switch_inline_query_current_chat работает, если у бота включён inline-режим в @BotFather
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📤 Отправить дату", callback_data=f"send_date:{date_str}")],
         [InlineKeyboardButton(text="📎 Вставить дату в поле", switch_inline_query_current_chat=date_str)],
     ])
-
-
-async def set_bot_commands(bot: Bot) -> None:
-    await bot.set_my_commands(commands=BOT_COMMANDS, scope=BotCommandScopeDefault())
-    try:
-        await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
-    except Exception:
-        pass
 
 
 @router.message(CommandStart())
@@ -142,8 +139,6 @@ async def on_status(message: Message) -> None:
     )
 
 
-# ---- Показ текущего локального времени (без выбора/изменений) ----
-
 @router.message(Command("timezone"))
 @router.message(F.text == "/timezone")
 async def show_timezone(message: Message) -> None:
@@ -155,7 +150,6 @@ async def show_timezone(message: Message) -> None:
     hh = abs(total_minutes) // 60
     mm = abs(total_minutes) % 60
     offset_str = f"{sign}{hh:02d}:{mm:02d}"
-
     text = (
         f"Часовой пояс бота: {settings.TIMEZONE} (UTC{offset_str})\n"
         f"Локальное время: {local_now.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
@@ -164,7 +158,7 @@ async def show_timezone(message: Message) -> None:
     await message.answer(text, reply_markup=main_menu_kb())
 
 
-# ==== Мастер добавления ====
+# ==== Добавление ====
 
 class AddStates(StatesGroup):
     waiting_user_id = State()
@@ -225,25 +219,20 @@ async def add_duedatetime(message: Message, state: FSMContext) -> None:
             reply_markup=main_menu_kb(),
         )
         return
-
     data = await state.get_data()
-    user_id = data["user_id"]
-    username = data["username"]
-
     async with SessionLocal() as session:
         item = Item(
-            user_id=user_id,
-            username=username,
+            user_id=data["user_id"],
+            username=data["username"],
             due_date=dt,
             chat_id=message.chat.id,
         )
         session.add(item)
         await session.commit()
         await session.refresh(item)
-
     await state.clear()
     await message.answer(
-        f"Добавлено: [{item.id}] USERID={user_id}, USERNAME={username}, DUE={fmt_dt_human(dt)}",
+        f"Добавлено: [{item.id}] USERID={item.user_id}, USERNAME={item.username}, DUE={fmt_dt_human(item.due_date)}",
         reply_markup=main_menu_kb(),
     )
 
@@ -271,15 +260,12 @@ async def renew_find_by_userid(message: Message, state: FSMContext) -> None:
         await message.answer("USERID должен быть числом. Введите ещё раз или /cancel.", reply_markup=main_menu_kb())
         return
     uid = int(text)
-
     async with SessionLocal() as session:
         result = await session.execute(select(Item).where(Item.user_id == uid).order_by(Item.due_date.asc()))
         items = result.scalars().all()
-
     if not items:
         await message.answer("Записей с таким USERID не найдено. Проверьте число или /cancel.", reply_markup=main_menu_kb())
         return
-
     if len(items) == 1:
         it = items[0]
         await state.update_data(item_id=it.id, user_id=it.user_id, username=it.username, old_due=fmt_dt_human(it.due_date))
@@ -291,13 +277,8 @@ async def renew_find_by_userid(message: Message, state: FSMContext) -> None:
             f"Текущая дата отключения: {fmt_dt_human(it.due_date)}",
             reply_markup=date_copy_kb(fmt_dt_human(it.due_date)),
         )
-        await message.answer(
-            "Отправьте новую дату в формате:\nYYYY-MM-DD HH:MM:SS",
-            reply_markup=main_menu_kb(),
-        )
+        await message.answer("Отправьте новую дату в формате:\nYYYY-MM-DD HH:MM:SS", reply_markup=main_menu_kb())
         return
-
-    # Несколько — предложим выбрать по дате (без ID в тексте)
     kb = choose_by_due_kb("renew", items)
     await message.answer("Найдено несколько записей по этому USERID. Выберите запись по дате:", reply_markup=kb)
 
@@ -314,7 +295,6 @@ async def renew_choose_item(cb: CallbackQuery, state: FSMContext) -> None:
     if not it:
         await cb.message.answer("Запись не найдена. Попробуйте снова /renew.", reply_markup=main_menu_kb())
         return
-
     await state.update_data(item_id=it.id, user_id=it.user_id, username=it.username, old_due=fmt_dt_human(it.due_date))
     await state.set_state(RenewStates.waiting_new_due)
     await cb.message.answer(
@@ -324,10 +304,7 @@ async def renew_choose_item(cb: CallbackQuery, state: FSMContext) -> None:
         f"Текущая дата отключения: {fmt_dt_human(it.due_date)}",
         reply_markup=date_copy_kb(fmt_dt_human(it.due_date)),
     )
-    await cb.message.answer(
-        "Отправьте новую дату в формате:\nYYYY-MM-DD HH:MM:SS",
-        reply_markup=main_menu_kb(),
-    )
+    await cb.message.answer("Отправьте новую дату в формате:\nYYYY-MM-DD HH:MM:SS", reply_markup=main_menu_kb())
 
 
 @router.message(RenewStates.waiting_new_due)
@@ -335,11 +312,7 @@ async def renew_get_new_due(message: Message, state: FSMContext) -> None:
     s = (message.text or "").strip()
     dt = parse_datetime_human(s)
     if not dt:
-        await message.answer(
-            "Неверный формат даты. Используйте YYYY-MM-DD HH:MM:SS.\n"
-            "Попробуйте ещё раз или /cancel.",
-            reply_markup=main_menu_kb(),
-        )
+        await message.answer("Неверный формат даты. Используйте YYYY-MM-DD HH:MM:SS.\nПопробуйте ещё раз или /cancel.", reply_markup=main_menu_kb())
         return
     new_due = fmt_dt_human(dt)
     data = await state.get_data()
@@ -362,11 +335,9 @@ async def renew_confirm(message: Message, state: FSMContext) -> None:
         await state.clear()
         await message.answer("Отменено.", reply_markup=main_menu_kb())
         return
-
     data = await state.get_data()
     item_id = int(data["item_id"])
     new_due_str = data["new_due"]
-
     async with SessionLocal() as session:
         item = await session.get(Item, item_id)
         if not item:
@@ -378,20 +349,14 @@ async def renew_confirm(message: Message, state: FSMContext) -> None:
             await state.clear()
             await message.answer("Ошибка при парсинге даты. Операция отменена.", reply_markup=main_menu_kb())
             return
-
         item.due_date = dt
         item.notified_count = 0
         item.last_notified_at = None
         await session.commit()
-
     await state.clear()
-    await message.answer(
-        f"✅ Продлено: USERID={data['user_id']}, USERNAME={data['username']}\nНовая дата DUE={new_due_str}",
-        reply_markup=main_menu_kb(),
-    )
+    await message.answer(f"✅ Продлено: USERID={data['user_id']}, USERNAME={data['username']}\nНовая дата DUE={new_due_str}", reply_markup=main_menu_kb())
 
 
-# Вспомогательно: отправить дату отдельным сообщением (для копирования)
 @router.callback_query(F.data.startswith("send_date:"))
 async def send_date(cb: CallbackQuery) -> None:
     await cb.answer()
@@ -399,7 +364,7 @@ async def send_date(cb: CallbackQuery) -> None:
     await cb.message.answer(date_str)
 
 
-# ==== Удаление по USERID с подтверждением (/delete) ====
+# ==== Удаление по USERID (/delete) ====
 
 class DeleteStates(StatesGroup):
     waiting_userid = State()
@@ -425,15 +390,12 @@ async def delete_by_userid(message: Message, state: FSMContext) -> None:
         await message.answer("USERID должен быть числом. Введите ещё раз или /cancel.", reply_markup=main_menu_kb())
         return
     uid = int(text)
-
     async with SessionLocal() as session:
         result = await session.execute(select(Item).where(Item.user_id == uid).order_by(Item.due_date.asc()))
         items = result.scalars().all()
-
     if not items:
         await message.answer("По этому USERID записей нет. Проверьте число или /cancel.", reply_markup=main_menu_kb())
         return
-
     if len(items) == 1:
         it = items[0]
         preview = f"USERID={it.user_id}, USERNAME={it.username}, DUE={fmt_dt_human(it.due_date)}"
@@ -441,11 +403,7 @@ async def delete_by_userid(message: Message, state: FSMContext) -> None:
         await state.set_state(DeleteStates.waiting_confirm)
         await message.answer("Удалить запись?\n" + preview, reply_markup=confirm_kb())
         return
-
-    # Несколько — предложим выбор по дате, плюс кнопка «Удалить все»
-    extra = [
-        InlineKeyboardButton(text="🗑 Удалить все записи этого USERID", callback_data=f"delete:all:{uid}")
-    ]
+    extra = [InlineKeyboardButton(text="🗑 Удалить все записи этого USERID", callback_data=f"delete:all:{uid}")]
     kb = choose_by_due_kb("delete", items, extra_row=extra)
     await message.answer("Найдено несколько записей. Выберите запись по дате или удалите все:", reply_markup=kb)
 
@@ -462,7 +420,6 @@ async def delete_choose_one(cb: CallbackQuery, state: FSMContext) -> None:
     if not it:
         await cb.message.answer("Запись не найдена. Попробуйте снова /delete.", reply_markup=main_menu_kb())
         return
-
     preview = f"USERID={it.user_id}, USERNAME={it.username}, DUE={fmt_dt_human(it.due_date)}"
     await state.update_data(action="one", item_id=it.id, user_id=it.user_id)
     await state.set_state(DeleteStates.waiting_confirm)
@@ -488,7 +445,6 @@ async def delete_confirm(message: Message, state: FSMContext) -> None:
         await state.clear()
         await message.answer("Отменено.", reply_markup=main_menu_kb())
         return
-
     data = await state.get_data()
     async with SessionLocal() as session:
         if data.get("action") == "one":
@@ -499,12 +455,11 @@ async def delete_confirm(message: Message, state: FSMContext) -> None:
             await session.execute(delete(Item).where(Item.user_id == int(data["user_id"])))
             await session.commit()
             msg = f"🗑️ Удалены все записи для USERID={data['user_id']}"
-
     await state.clear()
     await message.answer(msg, reply_markup=main_menu_kb())
 
 
-# ==== Списки/ближайшие ====
+# ==== Списки ====
 
 @router.message(Command("list"))
 @router.message(F.text == "/list")
@@ -512,11 +467,9 @@ async def on_list(message: Message) -> None:
     async with SessionLocal() as session:
         result = await session.execute(select(Item).order_by(Item.due_date.asc()))
         items = result.scalars().all()
-
     if not items:
         await message.answer("Список пуст.", reply_markup=main_menu_kb())
         return
-
     lines = [f"[{it.id}] {it.user_id} | {it.username} | {fmt_dt_human(it.due_date)}" for it in items]
     header = "ID | USERID | USERNAME | DUE DATE\n" + "-" * 40
     await message.answer(header + "\n" + "\n".join(lines), reply_markup=main_menu_kb())
@@ -529,12 +482,10 @@ async def on_disabled(message: Message) -> None:
     async with SessionLocal() as session:
         result = await session.execute(select(Item).order_by(Item.due_date.asc()))
         items = result.scalars().all()
-
     expired = [it for it in items if to_tz(it.due_date) <= now]
     if not expired:
         await message.answer("Отключённых (просроченных) нет.", reply_markup=main_menu_kb())
         return
-
     lines = [f"[{it.id}] {it.user_id} | {it.username} | {fmt_dt_human(it.due_date)}" for it in expired]
     header = "Disabled (просроченные):\n" + "-" * 40
     await message.answer(header + "\n" + "\n".join(lines), reply_markup=main_menu_kb())
@@ -546,10 +497,8 @@ async def on_next(message: Message) -> None:
     async with SessionLocal() as session:
         result = await session.execute(select(Item).order_by(Item.due_date.asc()).limit(10))
         items = result.scalars().all()
-
     if not items:
         await message.answer("Нет ближайших истечений.", reply_markup=main_menu_kb())
         return
-
     lines = [f"[{it.id}] {it.user_id} | {it.username} | {fmt_dt_human(it.due_date)}" for it in items]
     await message.answer("Ближайшие:\n" + "\n".join(lines), reply_markup=main_menu_kb())
