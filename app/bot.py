@@ -70,14 +70,6 @@ def confirm_kb() -> ReplyKeyboardMarkup:
     )
 
 
-async def set_bot_commands(bot: Bot) -> None:
-    await bot.set_my_commands(commands=BOT_COMMANDS, scope=BotCommandScopeDefault())
-    try:
-        await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
-    except Exception:
-        pass
-
-
 def choose_by_due_kb(prefix: str, items: list[Item], extra_row: list[InlineKeyboardButton] | None = None) -> InlineKeyboardMarkup:
     buttons = []
     for it in items:
@@ -93,6 +85,14 @@ def date_copy_kb(date_str: str) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="📤 Отправить дату", callback_data=f"send_date:{date_str}")],
         [InlineKeyboardButton(text="📎 Вставить дату в поле", switch_inline_query_current_chat=date_str)],
     ])
+
+
+async def set_bot_commands(bot: Bot) -> None:
+    await bot.set_my_commands(commands=BOT_COMMANDS, scope=BotCommandScopeDefault())
+    try:
+        await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+    except Exception:
+        pass
 
 
 @router.message(CommandStart())
@@ -243,6 +243,23 @@ class RenewStates(StatesGroup):
     waiting_userid = State()
     waiting_new_due = State()
     waiting_confirm = State()
+
+
+def choose_by_due_kb(prefix: str, items: list[Item], extra_row: list[InlineKeyboardButton] | None = None) -> InlineKeyboardMarkup:
+    buttons = []
+    for it in items:
+        label = f"{fmt_dt_human(it.due_date)} • {it.username}"
+        buttons.append([InlineKeyboardButton(text=label, callback_data=f"{prefix}:choose:{it.id}")])
+    if extra_row:
+        buttons.append(extra_row)
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def date_copy_kb(date_str: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📤 Отправить дату", callback_data=f"send_date:{date_str}")],
+        [InlineKeyboardButton(text="📎 Вставить дату в поле", switch_inline_query_current_chat=date_str)],
+    ])
 
 
 @router.message(Command("renew"))
@@ -498,7 +515,7 @@ async def on_next(message: Message) -> None:
         result = await session.execute(select(Item).order_by(Item.due_date.asc()).limit(10))
         items = result.scalars().all()
     if not items:
-        await message.answer("Нет ближайших истечений.", reply_markup=main_menu_kb())
+        await message.answer("Нет ближайших истечений.", reply_markup=main_menu_kб())
         return
     lines = [f"[{it.id}] {it.user_id} | {it.username} | {fmt_dt_human(it.due_date)}" for it in items]
     await message.answer("Ближайшие:\n" + "\n".join(lines), reply_markup=main_menu_kb())
