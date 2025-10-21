@@ -29,7 +29,10 @@ BOT_COMMANDS = [
     BotCommand(command="start", description="Запуск бота"),
     BotCommand(command="help", description="Справка по командам"),
     BotCommand(command="add", description="Добавить (мастер: USERID → USERNAME → дата/время)"),
-    BotCommand(command="list", description="Список записей"),
+    BotCommand(command="renew", description="Продлить по ID"),
+    BotCommand(command="delete", description="Удалить по ID (с подтверждением)"),
+    BotCommand(command="list", description="Список (отсортировано по дате)"),
+    BotCommand(command="disabled", description="Список отключённых (просроченных)"),
     BotCommand(command="next", description="Ближайшие истечения"),
     BotCommand(command="status", description="Статус бота"),
     BotCommand(command="timezone", description="Показать локальное время (TZ)"),
@@ -42,12 +45,23 @@ BOT_COMMANDS = [
 def main_menu_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="/add"), KeyboardButton(text="/list")],
+            [KeyboardButton(text="/add"), KeyboardButton(text="/renew")],
+            [KeyboardButton(text="/list"), KeyboardButton(text="/disabled")],
             [KeyboardButton(text="/next"), KeyboardButton(text="/status")],
             [KeyboardButton(text="/timezone"), KeyboardButton(text="/cancel")],
         ],
         resize_keyboard=True,
         input_field_placeholder="Выберите команду…",
+        selective=True,
+    )
+
+
+def confirm_kb() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="✅ Подтвердить"), KeyboardButton(text="❌ Отмена")],
+        ],
+        resize_keyboard=True,
         selective=True,
     )
 
@@ -105,9 +119,8 @@ async def on_status(message: Message) -> None:
 async def show_timezone(message: Message) -> None:
     local_now = now_tz()
     utc_now = datetime.now(timezone.utc)
-    offset_td = local_now.utcoffset() or timezone.utc.utcoffset(utc_now)
-    # формат смещения +05:00/-03:00
-    total_minutes = int(offset_td.total_seconds() // 60) if offset_td else 0
+    offset_td = local_now.utcoffset()
+    total_minutes = int((offset_td.total_seconds() // 60) if offset_td else 0)
     sign = "+" if total_minutes >= 0 else "-"
     hh = abs(total_minutes) // 60
     mm = abs(total_minutes) % 60
@@ -203,6 +216,160 @@ async def add_duedatetime(message: Message, state: FSMContext) -> None:
     )
 
 
+# ==== Продление по ID (/renew) ====
+
+class RenewStates(StatesGroup):
+    waiting_id = State()
+    waiting_new_due = State()
+    waiting_confirm = State()
+
+
+@router.message(Command("renew"))
+async def renew_start(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await state.set_state(RenewStates.waiting_id)
+    await message.answer("Укажи ID записи, которую нужно продлить:", reply_markup=main_menu_kb())
+
+
+@router.message(RenewStates.waiting_id)
+async def renew_get_id(message: Message, state: FSMContext) -> None:
+    text = (message.text or "").strip()
+    if not text.isdigit():
+        await message.answer("ID должен быть числом. Введите ещё раз или /cancel.", reply_markup=main_menu_kb())
+        return
+    item_id = int(text)
+    async with SessionLocal() as session:
+        item = await session.get(Item, item_id)
+        if not item:
+            await message.answer("Запись не найдена. Проверь ID или /cancel.", reply_markup=main_menu_kb())
+            return
+        await state.update_data(item_id=item_id, old_due=fmt_dt_human(item.due_date))
+    await state.set_state(RenewStates.waiting_new_due)
+    await message.answer(
+        "Текущая дата отключения:\n"
+        f"{(await state.get_data())['old_due']}\n\n"
+        "Отправьте новую дату в формате:\n"
+        "YYYY-MM-DD HH:MM:SS\n"
+        "Например: 2026-01-31 04:39:00",
+        reply_markup=main_menu_kb(),
+    )
+
+
+@router.message(RenewStates.waiting_new_due)
+async def renew_get_new_due(message: Message, state: FSMContext) -> None:
+    s = (message.text or "").strip()
+    dt = parse_datetime_human(s)
+    if not dt:
+        await message.answer(
+            "Неверный формат даты. Используйте YYYY-MM-DD HH:MM:SS.\n"
+            "Попробуйте ещё раз или /cancel.",
+            reply_markup=main_menu_kb(),
+        )
+        return
+    new_due = fmt_dt_human(dt)
+    data = await state.get_data()
+    await state.update_data(new_due=new_due)
+    await state.set_state(RenewStates.waiting_confirm)
+    await message.answer(
+        "Подтвердите продление:\n"
+        f"ID: {data['item_id']}\n"
+        f"Было: {data['old_due']}\n"
+        f"Станет: {new_due}",
+        reply_markup=confirm_kb(),
+    )
+
+
+@router.message(RenewStates.waiting_confirm)
+async def renew_confirm(message: Message, state: FSMContext) -> None:
+    text = (message.text or "").strip().lower()
+    if text not in ("✅ подтвердить", "подтвердить", "да", "ok", "ок"):
+        await state.clear()
+        await message.answer("Отменено.", reply_markup=main_menu_kb())
+        return
+
+    data = await state.get_data()
+    item_id = int(data["item_id"])
+    new_due_str = data["new_due"]
+
+    async with SessionLocal() as session:
+        item = await session.get(Item, item_id)
+        if not item:
+            await state.clear()
+            await message.answer("Запись не найдена.", reply_markup=main_menu_kb())
+            return
+        # Парсим обратно для сохранения в TZ
+        dt = parse_datetime_human(new_due_str)
+        if not dt:
+            await state.clear()
+            await message.answer("Ошибка при парсинге даты. Операция отменена.", reply_markup=main_menu_kb())
+            return
+
+        item.due_date = dt
+        item.notified_count = 0
+        item.last_notified_at = None
+        await session.commit()
+
+    await state.clear()
+    await message.answer(
+        f"✅ Продлено: [{item_id}] новая дата DUE={new_due_str}",
+        reply_markup=main_menu_kb(),
+    )
+
+
+# ==== Удаление по ID с подтверждением (/delete) ====
+
+class DeleteStates(StatesGroup):
+    waiting_id = State()
+    waiting_confirm = State()
+
+
+@router.message(Command("delete"))
+async def delete_start(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await state.set_state(DeleteStates.waiting_id)
+    await message.answer("Укажи ID записи, которую нужно удалить:", reply_markup=main_menu_kb())
+
+
+@router.message(DeleteStates.waiting_id)
+async def delete_get_id(message: Message, state: FSMContext) -> None:
+    text = (message.text or "").strip()
+    if not text.isdigit():
+        await message.answer("ID должен быть числом. Введите ещё раз или /cancel.", reply_markup=main_menu_kb())
+        return
+    item_id = int(text)
+    async with SessionLocal() as session:
+        item = await session.get(Item, item_id)
+        if not item:
+            await message.answer("Запись не найдена. Проверь ID или /cancel.", reply_markup=main_menu_kb())
+            return
+        preview = f"[{item.id}] {item.user_id} | {item.username} | {fmt_dt_human(item.due_date)}"
+    await state.update_data(item_id=item_id)
+    await state.set_state(DeleteStates.waiting_confirm)
+    await message.answer(
+        "Удалить запись?\n" + preview,
+        reply_markup=confirm_kb(),
+    )
+
+
+@router.message(DeleteStates.waiting_confirm)
+async def delete_confirm(message: Message, state: FSMContext) -> None:
+    text = (message.text or "").strip().lower()
+    if text not in ("✅ подтвердить", "подтвердить", "да", "ok", "ок"):
+        await state.clear()
+        await message.answer("Отменено.", reply_markup=main_menu_kb())
+        return
+
+    data = await state.get_data()
+    item_id = int(data["item_id"])
+
+    async with SessionLocal() as session:
+        await session.execute(delete(Item).where(Item.id == item_id))
+        await session.commit()
+
+    await state.clear()
+    await message.answer(f"🗑️ Удалено: id={item_id}", reply_markup=main_menu_kb())
+
+
 # ==== Списки/удаление/ближайшие ====
 
 @router.message(Command("list"))
@@ -220,8 +387,26 @@ async def on_list(message: Message) -> None:
     await message.answer(header + "\n" + "\n".join(lines), reply_markup=main_menu_kb())
 
 
+@router.message(Command("disabled"))
+async def on_disabled(message: Message) -> None:
+    now = now_tz()
+    async with SessionLocal() as session:
+        result = await session.execute(select(Item).order_by(Item.due_date.asc()))
+        items = result.scalars().all()
+
+    expired = [it for it in items if it.due_date <= now]
+    if not expired:
+        await message.answer("Отключённых (просроченных) нет.", reply_markup=main_menu_kb())
+        return
+
+    lines = [f"[{it.id}] {it.user_id} | {it.username} | {fmt_dt_human(it.due_date)}" for it in expired]
+    header = "Disabled (просроченные):\n" + "-" * 40
+    await message.answer(header + "\n" + "\n".join(lines), reply_markup=main_menu_kb())
+
+
 @router.message(Command("remove"))
 async def on_remove(message: Message) -> None:
+    # Оставлено для совместимости: /remove <id> (без подтверждения)
     parts = (message.text or "").split()
     if len(parts) != 2 or not parts[1].isdigit():
         await message.answer("Использование: /remove <id>", reply_markup=main_menu_kb())
