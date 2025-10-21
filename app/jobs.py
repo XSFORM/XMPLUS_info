@@ -7,17 +7,18 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.db import SessionLocal, Item
-from app.utils import now_tz, fmt_dt_human, tz_offset_str
+from app.utils import now_tz, fmt_dt_human, tz_offset_str, to_tz
 
 
 async def check_expiries(bot: Bot) -> None:
     """
     Уведомления по каждому Item:
-    - 1-й раз: Ровно в окно за PRE_NOTIFY_HOURS до due_date (если ещё не отправляли и срок не наступил).
-    - 2-й раз: После наступления due_date (если ещё не отправляли «просрочено»).
-    Больше 2 уведомлений по одной записи не отправляем.
+    - 1-й раз: когда до due_date осталось <= PRE_NOTIFY_HOURS (и ещё не наступил срок).
+    - 2-й раз: после наступления due_date (о просрочке).
+    Больше 2 уведомлений по записи не отправляем.
+    Всегда приводим due_date к локальной TZ, чтобы избежать "offset-naive vs aware".
     """
-    now = now_tz()
+    now = now_tz()  # tz-aware в вашей TZ (Asia/Ashgabat)
     pre_hours = settings.PRE_NOTIFY_HOURS
     tz_str = f"UTC{tz_offset_str()}"
 
@@ -25,19 +26,19 @@ async def check_expiries(bot: Bot) -> None:
         items = (await session.execute(select(Item).order_by(Item.due_date.asc()))).scalars().all()
 
         for it in items:
-            # Куда отправлять: chat_id элемента или OWNER_CHAT_ID
+            # Куда отправлять: chat_id записи или OWNER_CHAT_ID из .env
             target_chat = it.chat_id or (int(settings.OWNER_CHAT_ID) if settings.OWNER_CHAT_ID else None)
             if not target_chat:
                 continue
 
             if it.notified_count >= 2:
-                # Уже отправляли оба уведомления
-                continue
+                continue  # уже отправили оба уведомления
 
-            due = it.due_date
+            # Приводим due_date к tz-aware в локальной TZ (если вдруг было без tz)
+            due = to_tz(it.due_date)
             delta = due - now
 
-            # 1) Предупреждение за N часов до истечения (отправляем ровно один раз)
+            # 1) Предупреждение за N часов до истечения (один раз)
             if it.notified_count == 0 and now < due and delta <= timedelta(hours=pre_hours):
                 text = (
                     "⏰ Уведомление\n"
@@ -48,12 +49,11 @@ async def check_expiries(bot: Bot) -> None:
                 try:
                     await bot.send_message(target_chat, text)
                 except Exception:
-                    # не валим всю задачу из-за одной ошибки
                     pass
                 else:
                     it.notified_count = 1
                     it.last_notified_at = now
-                    continue  # к следующему item
+                    continue
 
             # 2) Сообщение о просрочке (один раз)
             if now >= due and it.notified_count < 2:
