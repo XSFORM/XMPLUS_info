@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from aiogram import Router, Bot
 from aiogram.filters import CommandStart, Command
 from aiogram.types import (
@@ -17,13 +19,7 @@ from aiogram.fsm.context import FSMContext
 from sqlalchemy import select, delete
 
 from app.db import SessionLocal, Item
-from app.utils import (
-    parse_datetime_human,
-    fmt_dt_human,
-    is_valid_timezone,
-    common_timezones,
-    update_dotenv_var,
-)
+from app.utils import parse_datetime_human, fmt_dt_human, now_tz
 from app.config import settings
 
 router = Router()
@@ -36,7 +32,7 @@ BOT_COMMANDS = [
     BotCommand(command="list", description="Список записей"),
     BotCommand(command="next", description="Ближайшие истечения"),
     BotCommand(command="status", description="Статус бота"),
-    BotCommand(command="timezone", description="Показать/изменить часовой пояс"),
+    BotCommand(command="timezone", description="Показать локальное время (TZ)"),
     BotCommand(command="cancel", description="Отменить текущий ввод"),
     BotCommand(command="menu", description="Показать клавиатуру"),
     BotCommand(command="hide", description="Скрыть клавиатуру"),
@@ -54,22 +50,6 @@ def main_menu_kb() -> ReplyKeyboardMarkup:
         input_field_placeholder="Выберите команду…",
         selective=True,
     )
-
-
-def tz_choice_kb() -> ReplyKeyboardMarkup:
-    tzs = common_timezones()
-    # разбросаем по рядам по 2-3 кнопки
-    rows = []
-    row: list[KeyboardButton] = []
-    for i, name in enumerate(tzs, 1):
-        row.append(KeyboardButton(text=name))
-        if len(row) == 2:
-            rows.append(row)
-            row = []
-    if row:
-        rows.append(row)
-    rows.append([KeyboardButton(text="/cancel"), KeyboardButton(text="/hide")])
-    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, selective=True)
 
 
 async def set_bot_commands(bot: Bot) -> None:
@@ -119,48 +99,26 @@ async def on_status(message: Message) -> None:
     )
 
 
-# ==== Timezone ====
-
-class TzStates(StatesGroup):
-    waiting_tz = State()
-
+# ---- Показ текущего локального времени (без выбора/изменений) ----
 
 @router.message(Command("timezone"))
-async def tz_start(message: Message, state: FSMContext) -> None:
-    await state.set_state(TzStates.waiting_tz)
-    tips = "\n".join(f"• {z}" for z in common_timezones())
-    await message.answer(
-        "Часовой пояс\n"
-        f"Текущий: {settings.TIMEZONE}\n\n"
-        "Отправьте новый часовой пояс (IANA), например: Europe/Moscow\n"
-        "Или выберите из кнопок ниже.\n\n"
-        f"Популярные:\n{tips}",
-        reply_markup=tz_choice_kb(),
+async def show_timezone(message: Message) -> None:
+    local_now = now_tz()
+    utc_now = datetime.now(timezone.utc)
+    offset_td = local_now.utcoffset() or timezone.utc.utcoffset(utc_now)
+    # формат смещения +05:00/-03:00
+    total_minutes = int(offset_td.total_seconds() // 60) if offset_td else 0
+    sign = "+" if total_minutes >= 0 else "-"
+    hh = abs(total_minutes) // 60
+    mm = abs(total_minutes) % 60
+    offset_str = f"{sign}{hh:02d}:{mm:02d}"
+
+    text = (
+        f"Часовой пояс бота: {settings.TIMEZONE} (UTC{offset_str})\n"
+        f"Локальное время: {local_now.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
+        f"UTC:            {utc_now.strftime('%Y-%m-%d %H:%M:%S UTC')}"
     )
-
-
-@router.message(TzStates.waiting_tz)
-async def tz_set(message: Message, state: FSMContext) -> None:
-    tz = (message.text or "").strip()
-    if tz.startswith("/"):
-        # пользователь нажал другую команду — сброс состояния
-        await state.clear()
-        return
-    if not is_valid_timezone(tz):
-        await message.answer(
-            "Некорректный часовой пояс. Пример: Europe/Moscow\n"
-            "Поддерживаются IANA-имена (Europe/Kyiv, Asia/Tashkent, UTC и т.п.).",
-            reply_markup=tz_choice_kb(),
-        )
-        return
-
-    # сохраняем в рантайме и в .env
-    settings.TIMEZONE = tz
-    env_path = update_dotenv_var("TIMEZONE", tz)
-    saved = f" (сохранено в {env_path})" if env_path else " (не удалось сохранить в .env, но в рантайме применено)"
-
-    await state.clear()
-    await message.answer(f"Часовой пояс установлен: {tz}{saved}", reply_markup=main_menu_kb())
+    await message.answer(text, reply_markup=main_menu_kb())
 
 
 # ==== Мастер добавления ====
