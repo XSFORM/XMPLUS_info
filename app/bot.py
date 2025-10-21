@@ -24,7 +24,7 @@ from app.config import settings
 
 router = Router()
 
-# Команды для меню Telegram
+# Команды для меню Telegram.
 BOT_COMMANDS = [
     BotCommand(command="start", description="Запуск бота"),
     BotCommand(command="help", description="Справка по командам"),
