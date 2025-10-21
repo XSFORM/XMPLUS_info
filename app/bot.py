@@ -30,7 +30,7 @@ BOT_COMMANDS = [
     BotCommand(command="help", description="Справка по командам"),
     BotCommand(command="add", description="Добавить (мастер: USERID → USERNAME → дата/время)"),
     BotCommand(command="renew", description="Продлить по ID"),
-    BotCommand(command="delete", description="Удалить по ID (с подтверждением)"),
+    BotCommand(command="delete", description="Удалить по ID/USERID (с подтверждением)"),
     BotCommand(command="list", description="Список (отсортировано по дате)"),
     BotCommand(command="disabled", description="Список отключённых (просроченных)"),
     BotCommand(command="next", description="Ближайшие истечения"),
@@ -48,6 +48,7 @@ def main_menu_kb() -> ReplyKeyboardMarkup:
             [KeyboardButton(text="/add"), KeyboardButton(text="/renew")],
             [KeyboardButton(text="/list"), KeyboardButton(text="/disabled")],
             [KeyboardButton(text="/next"), KeyboardButton(text="/status")],
+            [KeyboardButton(text="/delete"), KeyboardButton(text="/help")],
             [KeyboardButton(text="/timezone"), KeyboardButton(text="/cancel")],
         ],
         resize_keyboard=True,
@@ -237,7 +238,7 @@ class RenewStates(StatesGroup):
 async def renew_start(message: Message, state: FSMContext) -> None:
     await state.clear()
     await state.set_state(RenewStates.waiting_id)
-    await message.answer("Укажи ID записи, которую нужно продлить:", reply_markup=main_menu_kb())
+    await message.answer("Укажи ID записи, которую нужно продлить (число в квадратных скобках из /list, напр. 3):", reply_markup=main_menu_kb())
 
 
 @router.message(RenewStates.waiting_id)
@@ -324,10 +325,10 @@ async def renew_confirm(message: Message, state: FSMContext) -> None:
     )
 
 
-# ==== Удаление по ID с подтверждением (/delete) ====
+# ==== Удаление по ID/USERID с подтверждением (/delete) ====
 
 class DeleteStates(StatesGroup):
-    waiting_id = State()
+    waiting_id_or_uid = State()
     waiting_confirm = State()
 
 
@@ -335,29 +336,53 @@ class DeleteStates(StatesGroup):
 @router.message(F.text == "/delete")
 async def delete_start(message: Message, state: FSMContext) -> None:
     await state.clear()
-    await state.set_state(DeleteStates.waiting_id)
-    await message.answer("Укажи ID записи, которую нужно удалить:", reply_markup=main_menu_kb())
+    await state.set_state(DeleteStates.waiting_id_or_uid)
+    await message.answer(
+        "Укажи ID записи, которую нужно удалить.\n"
+        "ID — это число в квадратных скобках из /list (например: 3 для строки вида [3] ...)\n"
+        "Можно также ввести USERID (если один клиент с таким USERID — предложу удалить его).",
+        reply_markup=main_menu_kb(),
+    )
 
 
-@router.message(DeleteStates.waiting_id)
-async def delete_get_id(message: Message, state: FSMContext) -> None:
+@router.message(DeleteStates.waiting_id_or_uid)
+async def delete_get_id_or_uid(message: Message, state: FSMContext) -> None:
     text = (message.text or "").strip()
     if not text.isdigit():
-        await message.answer("ID должен быть числом. Введите ещё раз или /cancel.", reply_markup=main_menu_kb())
+        await message.answer("Нужно ввести число (ID записи или USERID). Попробуйте ещё раз или /cancel.", reply_markup=main_menu_kb())
         return
-    item_id = int(text)
+
+    number = int(text)
+
     async with SessionLocal() as session:
-        item = await session.get(Item, item_id)
-        if not item:
-            await message.answer("Запись не найдена. Проверь ID или /cancel.", reply_markup=main_menu_kb())
+        # Сначала пробуем как ID записи
+        item = await session.get(Item, number)
+        if item:
+            preview = f"[{item.id}] {item.user_id} | {item.username} | {fmt_dt_human(item.due_date)}"
+            await state.update_data(item_id=item.id)
+            await state.set_state(DeleteStates.waiting_confirm)
+            await message.answer("Удалить запись?\n" + preview, reply_markup=confirm_kb())
             return
-        preview = f"[{item.id}] {item.user_id} | {item.username} | {fmt_dt_human(item.due_date)}"
-    await state.update_data(item_id=item_id)
-    await state.set_state(DeleteStates.waiting_confirm)
-    await message.answer(
-        "Удалить запись?\n" + preview,
-        reply_markup=confirm_kb(),
-    )
+
+        # Если как ID не нашли — пробуем как USERID
+        result = await session.execute(select(Item).where(Item.user_id == number).order_by(Item.due_date.desc()))
+        candidates = result.scalars().all()
+
+    if not candidates:
+        await message.answer("Запись не найдена ни по ID, ни по USERID. Проверьте число или /cancel.", reply_markup=main_menu_kb())
+        return
+
+    if len(candidates) == 1:
+        it = candidates[0]
+        preview = f"[{it.id}] {it.user_id} | {it.username} | {fmt_dt_human(it.due_date)}"
+        await state.update_data(item_id=it.id)
+        await state.set_state(DeleteStates.waiting_confirm)
+        await message.answer("Найден по USERID. Удалить запись?\n" + preview, reply_markup=confirm_kb())
+        return
+
+    # Несколько кандидатов — показываем список и просим ввести ID
+    lines = [f"[{it.id}] {it.user_id} | {it.username} | {fmt_dt_human(it.due_date)}" for it in candidates]
+    await message.answer("Найдено несколько записей по USERID, укажите ID из списка:\n" + "\n".join(lines), reply_markup=main_menu_kb())
 
 
 @router.message(DeleteStates.waiting_confirm)
