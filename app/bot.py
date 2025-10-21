@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from aiogram import Router, Bot
+from aiogram import Router, Bot, F
 from aiogram.filters import CommandStart, Command
 from aiogram.types import (
     Message,
@@ -19,7 +19,7 @@ from aiogram.fsm.context import FSMContext
 from sqlalchemy import select, delete
 
 from app.db import SessionLocal, Item
-from app.utils import parse_datetime_human, fmt_dt_human, now_tz
+from app.utils import parse_datetime_human, fmt_dt_human, now_tz, to_tz
 from app.config import settings
 
 router = Router()
@@ -75,6 +75,7 @@ async def set_bot_commands(bot: Bot) -> None:
 
 
 @router.message(CommandStart())
+@router.message(F.text == "/start")
 async def on_start(message: Message) -> None:
     await message.answer(
         "✅ XMPLUS запущен.\n"
@@ -84,6 +85,7 @@ async def on_start(message: Message) -> None:
 
 
 @router.message(Command("help"))
+@router.message(F.text == "/help")
 async def on_help(message: Message) -> None:
     text = (
         "Доступные команды:\n"
@@ -94,16 +96,19 @@ async def on_help(message: Message) -> None:
 
 
 @router.message(Command("menu"))
+@router.message(F.text == "/menu")
 async def show_menu(message: Message) -> None:
     await message.answer("Клавиатура показана.", reply_markup=main_menu_kb())
 
 
 @router.message(Command("hide"))
+@router.message(F.text == "/hide")
 async def hide_menu(message: Message) -> None:
     await message.answer("Клавиатура скрыта.", reply_markup=ReplyKeyboardRemove())
 
 
 @router.message(Command("status"))
+@router.message(F.text == "/status")
 async def on_status(message: Message) -> None:
     async with SessionLocal() as session:
         total = (await session.execute(select(Item))).scalars().unique().all()
@@ -116,6 +121,7 @@ async def on_status(message: Message) -> None:
 # ---- Показ текущего локального времени (без выбора/изменений) ----
 
 @router.message(Command("timezone"))
+@router.message(F.text == "/timezone")
 async def show_timezone(message: Message) -> None:
     local_now = now_tz()
     utc_now = datetime.now(timezone.utc)
@@ -143,12 +149,14 @@ class AddStates(StatesGroup):
 
 
 @router.message(Command("cancel"))
+@router.message(F.text == "/cancel")
 async def on_cancel(message: Message, state: FSMContext) -> None:
     await state.clear()
     await message.answer("Отменено.", reply_markup=main_menu_kb())
 
 
 @router.message(Command("add"))
+@router.message(F.text == "/add")
 async def add_start(message: Message, state: FSMContext) -> None:
     await state.clear()
     await state.set_state(AddStates.waiting_user_id)
@@ -225,6 +233,7 @@ class RenewStates(StatesGroup):
 
 
 @router.message(Command("renew"))
+@router.message(F.text == "/renew")
 async def renew_start(message: Message, state: FSMContext) -> None:
     await state.clear()
     await state.set_state(RenewStates.waiting_id)
@@ -297,7 +306,6 @@ async def renew_confirm(message: Message, state: FSMContext) -> None:
             await state.clear()
             await message.answer("Запись не найдена.", reply_markup=main_menu_kb())
             return
-        # Парсим обратно для сохранения в TZ
         dt = parse_datetime_human(new_due_str)
         if not dt:
             await state.clear()
@@ -324,6 +332,7 @@ class DeleteStates(StatesGroup):
 
 
 @router.message(Command("delete"))
+@router.message(F.text == "/delete")
 async def delete_start(message: Message, state: FSMContext) -> None:
     await state.clear()
     await state.set_state(DeleteStates.waiting_id)
@@ -370,9 +379,10 @@ async def delete_confirm(message: Message, state: FSMContext) -> None:
     await message.answer(f"🗑️ Удалено: id={item_id}", reply_markup=main_menu_kb())
 
 
-# ==== Списки/удаление/ближайшие ====
+# ==== Списки/ближайшие ====
 
 @router.message(Command("list"))
+@router.message(F.text == "/list")
 async def on_list(message: Message) -> None:
     async with SessionLocal() as session:
         result = await session.execute(select(Item).order_by(Item.due_date.asc()))
@@ -388,13 +398,14 @@ async def on_list(message: Message) -> None:
 
 
 @router.message(Command("disabled"))
+@router.message(F.text == "/disabled")
 async def on_disabled(message: Message) -> None:
     now = now_tz()
     async with SessionLocal() as session:
         result = await session.execute(select(Item).order_by(Item.due_date.asc()))
         items = result.scalars().all()
 
-    expired = [it for it in items if it.due_date <= now]
+    expired = [it for it in items if to_tz(it.due_date) <= now]
     if not expired:
         await message.answer("Отключённых (просроченных) нет.", reply_markup=main_menu_kb())
         return
@@ -404,23 +415,8 @@ async def on_disabled(message: Message) -> None:
     await message.answer(header + "\n" + "\n".join(lines), reply_markup=main_menu_kb())
 
 
-@router.message(Command("remove"))
-async def on_remove(message: Message) -> None:
-    # Оставлено для совместимости: /remove <id> (без подтверждения)
-    parts = (message.text or "").split()
-    if len(parts) != 2 or not parts[1].isdigit():
-        await message.answer("Использование: /remove <id>", reply_markup=main_menu_kb())
-        return
-    item_id = int(parts[1])
-
-    async with SessionLocal() as session:
-        await session.execute(delete(Item).where(Item.id == item_id))
-        await session.commit()
-
-    await message.answer(f"Удалено (если было): id={item_id}", reply_markup=main_menu_kb())
-
-
 @router.message(Command("next"))
+@router.message(F.text == "/next")
 async def on_next(message: Message) -> None:
     async with SessionLocal() as session:
         result = await session.execute(select(Item).order_by(Item.due_date.asc()).limit(10))
