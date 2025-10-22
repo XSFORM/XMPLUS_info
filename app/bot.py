@@ -22,8 +22,16 @@ from aiogram.fsm.context import FSMContext
 from sqlalchemy import select, delete
 
 from app.db import SessionLocal, Item
-from app.utils import parse_datetime_human, fmt_dt_human, now_tz, to_tz
 from app.config import settings
+from app.utils import (
+    parse_datetime_human,
+    fmt_dt_human,
+    now_tz,
+    to_tz,
+    tz_offset_str,
+    get_active_timezone_name,
+    set_active_timezone_name,
+)
 
 router = Router()
 
@@ -38,7 +46,7 @@ BOT_COMMANDS = [
     BotCommand(command="disabled", description="Список отключённых (просроченных)"),
     BotCommand(command="next", description="Ближайшие истечения"),
     BotCommand(command="status", description="Статус бота"),
-    BotCommand(command="timezone", description="Показать локальное время (TZ)"),
+    BotCommand(command="timezone", description="Показать/сменить локальное время (TZ)"),
     BotCommand(command="cancel", description="Отменить текущий ввод"),
     BotCommand(command="menu", description="Показать клавиатуру"),
     BotCommand(command="hide", description="Скрыть клавиатуру"),
@@ -71,7 +79,6 @@ def confirm_kb() -> ReplyKeyboardMarkup:
 
 
 def choose_by_due_kb(prefix: str, items: list[Item], extra_row: list[InlineKeyboardButton] | None = None) -> InlineKeyboardMarkup:
-    # Кнопки выбора по дате (ID нигде не показываем)
     buttons = []
     for it in items:
         label = f"{fmt_dt_human(it.due_date)} • {it.username}"
@@ -82,8 +89,6 @@ def choose_by_due_kb(prefix: str, items: list[Item], extra_row: list[InlineKeybo
 
 
 def date_copy_kb(date_str: str) -> InlineKeyboardMarkup:
-    # Кнопки для удобного копирования/вставки даты
-    # switch_inline_query_current_chat работает, если у бота включён inline-режим в @BotFather
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📤 Отправить дату", callback_data=f"send_date:{date_str}")],
         [InlineKeyboardButton(text="📎 Вставить дату в поле", switch_inline_query_current_chat=date_str)],
@@ -137,31 +142,46 @@ async def on_status(message: Message) -> None:
     async with SessionLocal() as session:
         total = (await session.execute(select(Item))).scalars().unique().all()
     await message.answer(
-        f"Бот работает ✅\nВ базе записей: {len(total)}\nTIMEZONE: {settings.TIMEZONE}",
+        f"Бот работает ✅\nВ базе записей: {len(total)}\nACTIVE_TZ: {get_active_timezone_name()} (UTC{tz_offset_str()})",
         reply_markup=main_menu_kb(),
     )
 
 
-# ---- Показ текущего локального времени (без выбора/изменений) ----
+# ==== Таймзона: показ и переключение ====
+
+def tz_switch_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="GMT+5 • Ashgabat", callback_data="tz:set:Asia/Ashgabat"),
+            InlineKeyboardButton(text="GMT+8 • Singapore", callback_data="tz:set:Asia/Singapore"),
+        ]
+    ])
+
 
 @router.message(Command("timezone"))
 @router.message(F.text == "/timezone")
 async def show_timezone(message: Message) -> None:
     local_now = now_tz()
     utc_now = datetime.now(timezone.utc)
-    offset_td = local_now.utcoffset()
-    total_minutes = int((offset_td.total_seconds() // 60) if offset_td else 0)
-    sign = "+" if total_minutes >= 0 else "-"
-    hh = abs(total_minutes) // 60
-    mm = abs(total_minutes) % 60
-    offset_str = f"{sign}{hh:02d}:{mm:02d}"
 
     text = (
-        f"Часовой пояс бота: {settings.TIMEZONE} (UTC{offset_str})\n"
+        f"Активный часовой пояс: {get_active_timezone_name()} (UTC{tz_offset_str()})\n"
         f"Локальное время: {local_now.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
-        f"UTC:            {utc_now.strftime('%Y-%m-%d %H:%M:%S UTC')}"
+        f"UTC:            {utc_now.strftime('%Y-%m-%d %H:%M:%S UTC')}\n\n"
+        "Переключить:"
     )
-    await message.answer(text, reply_markup=main_menu_kb())
+    await message.answer(text, reply_markup=tz_switch_kb())
+
+
+@router.callback_query(F.data.startswith("tz:set:"))
+async def tz_set(cb: CallbackQuery) -> None:
+    await cb.answer()
+    tz_name = cb.data.split(":", 2)[-1]
+    ok = set_active_timezone_name(tz_name)
+    if ok:
+        await cb.message.answer(f"✅ Часовой пояс установлен: {tz_name} (UTC{tz_offset_str()})")
+    else:
+        await cb.message.answer("❌ Не удалось установить часовой пояс. Проверьте логи.")
 
 
 # ==== Мастер добавления ====
@@ -297,7 +317,6 @@ async def renew_find_by_userid(message: Message, state: FSMContext) -> None:
         )
         return
 
-    # Несколько — предложим выбрать по дате (без ID в тексте)
     kb = choose_by_due_kb("renew", items)
     await message.answer("Найдено несколько записей по этому USERID. Выберите запись по дате:", reply_markup=kb)
 
@@ -392,7 +411,6 @@ async def renew_confirm(message: Message, state: FSMContext) -> None:
     )
 
 
-# Вспомогательно: отправить дату отдельным сообщением (для копирования)
 @router.callback_query(F.data.startswith("send_date:"))
 async def send_date(cb: CallbackQuery) -> None:
     await cb.answer()
@@ -443,10 +461,7 @@ async def delete_by_userid(message: Message, state: FSMContext) -> None:
         await message.answer("Удалить запись?\n" + preview, reply_markup=confirm_kb())
         return
 
-    # Несколько — предложим выбор по дате, плюс кнопка «Удалить все»
-    extra = [
-        InlineKeyboardButton(text="🗑 Удалить все записи этого USERID", callback_data=f"delete:all:{uid}")
-    ]
+    extra = [InlineKeyboardButton(text="🗑 Удалить все записи этого USERID", callback_data=f"delete:all:{uid}")]
     kb = choose_by_due_kb("delete", items, extra_row=extra)
     await message.answer("Найдено несколько записей. Выберите запись по дате или удалите все:", reply_markup=kb)
 
@@ -487,7 +502,7 @@ async def delete_confirm(message: Message, state: FSMContext) -> None:
     text = (message.text or "").strip().lower()
     if text not in ("✅ подтвердить", "подтвердить", "да", "ok", "ок"):
         await state.clear()
-        await message.answer("Отменено.", reply_markup=main_menu_kб())
+        await message.answer("Отменено.", reply_markup=main_menu_kb())
         return
 
     data = await state.get_data()
