@@ -610,7 +610,10 @@ async def on_disabled(message: Message) -> None:
 
     lines = [f"[{it.id}] {it.user_id} | {it.username} | {fmt_dt_human(it.due_date)}" for it in expired]
     header = "Disabled (просроченные):\n" + "-" * 40
-    await message.answer(header + "\n" + "\n".join(lines), reply_markup=main_menu_kb())
+    chunks = split_text_chunks(header, lines)
+    for i, ch in enumerate(chunks, 1):
+        suffix = f" (стр. {i}/{len(chunks)})" if len(chunks) > 1 else ""
+        await message.answer(ch + ("" if not suffix else "\n" + suffix), reply_markup=main_menu_kb() if i == len(chunks) else None)
 
 
 @router.message(Command("next"))
