@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+import csv, io
+from aiogram.types import BufferedInputFile
 
 from aiogram import Router, Bot, F
 from aiogram.filters import CommandStart, Command
@@ -87,6 +89,37 @@ def choose_by_due_kb(prefix: str, items: list[Item], extra_row: list[InlineKeybo
         buttons.append(extra_row)
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
+
+# ---- helpers: длинный текст и CSV-экспорт для списка ----
+
+MESSAGE_LIMIT = 3900  # запас к лимиту 4096
+
+def split_text_chunks(header: str, lines: list[str]) -> list[str]:
+    chunks = []
+    current = header + "\n"
+    for ln in lines:
+        add = ln + "\n"
+        if len(current) + len(add) > MESSAGE_LIMIT:
+            chunks.append(current.rstrip())
+            current = "(продолжение)\n" + add
+        else:
+            current += add
+    if current.strip():
+        chunks.append(current.rstrip())
+    return chunks
+
+async def build_items_csv_bytes(items) -> bytes:
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["user_id", "username", "due_date"])
+    for it in items:
+        # due_date в активной TZ, в строгом формате
+        from app.utils import fmt_dt_human
+        w.writerow([it.user_id, it.username, fmt_dt_human(it.due_date)])
+    data = buf.getvalue().encode("utf-8")
+    buf.close()
+    return data
+    
 
 def date_copy_kb(date_str: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -518,6 +551,18 @@ async def delete_confirm(message: Message, state: FSMContext) -> None:
 
     await state.clear()
     await message.answer(msg, reply_markup=main_menu_kb())
+    
+@router.callback_query(F.data == "list:export_csv")
+async def list_export_csv(cb: CallbackQuery) -> None:
+    await cb.answer()
+    async with SessionLocal() as session:
+        result = await session.execute(select(Item).order_by(Item.due_date.asc()))
+        items = result.scalars().all()
+    data = await build_items_csv_bytes(items)
+    await cb.message.answer_document(
+        BufferedInputFile(data, filename="clients_export.csv"),
+        caption=f"Экспорт: {len(items)} записей"
+    )    
 
 
 # ==== Списки/ближайшие ====
@@ -533,9 +578,21 @@ async def on_list(message: Message) -> None:
         await message.answer("Список пуст.", reply_markup=main_menu_kb())
         return
 
+    from app.utils import fmt_dt_human
     lines = [f"[{it.id}] {it.user_id} | {it.username} | {fmt_dt_human(it.due_date)}" for it in items]
     header = "ID | USERID | USERNAME | DUE DATE\n" + "-" * 40
-    await message.answer(header + "\n" + "\n".join(lines), reply_markup=main_menu_kb())
+    chunks = split_text_chunks(header, lines)
+
+    # Отправим 1–N сообщений с текстом
+    for i, ch in enumerate(chunks, 1):
+        suffix = f" (стр. {i}/{len(chunks)})" if len(chunks) > 1 else ""
+        await message.answer(ch + ("" if not suffix else "\n" + suffix))
+
+    # Кнопка для экспорта CSV
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⬇️ Экспорт CSV", callback_data="list:export_csv")]
+    ])
+    await message.answer(f"Всего записей: {len(items)}", reply_markup=kb)
 
 
 @router.message(Command("disabled"))
@@ -559,13 +616,24 @@ async def on_disabled(message: Message) -> None:
 @router.message(Command("next"))
 @router.message(F.text == "/next")
 async def on_next(message: Message) -> None:
-    async with SessionLocal() as session:
-        result = await session.execute(select(Item).order_by(Item.due_date.asc()).limit(10))
-        items = result.scalars().all()
+    from app.utils import now_tz, to_tz, fmt_dt_human
+    now = now_tz()
+    end = now + timedelta(days=3)
 
-    if not items:
-        await message.answer("Нет ближайших истечений.", reply_markup=main_menu_kb())
+    async with SessionLocal() as session:
+        result = await session.execute(select(Item).order_by(Item.due_date.asc()))
+        all_items = result.scalars().all()
+
+    # Берём те, что строго после "сейчас" и до "через 3 дня"
+    window = [it for it in all_items if now < to_tz(it.due_date) <= end]
+
+    if not window:
+        await message.answer("Нет истечений в ближайшие 3 дня.", reply_markup=main_menu_kb())
         return
 
-    lines = [f"[{it.id}] {it.user_id} | {it.username} | {fmt_dt_human(it.due_date)}" for it in items]
-    await message.answer("Ближайшие:\n" + "\n".join(lines), reply_markup=main_menu_kb())
+    lines = [f"[{it.id}] {it.user_id} | {it.username} | {fmt_dt_human(it.due_date)}" for it in window]
+    header = "Ближайшие (до 3 дней):\n" + "-" * 40
+    chunks = split_text_chunks(header, lines)
+    for i, ch in enumerate(chunks, 1):
+        suffix = f" (стр. {i}/{len(chunks)})" if len(chunks) > 1 else ""
+        await message.answer(ch + ("" if not suffix else "\n" + suffix), reply_markup=main_menu_kb() if i == len(chunks) else None)
