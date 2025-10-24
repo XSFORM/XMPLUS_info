@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone, timedelta
-import csv, io
-from aiogram.types import BufferedInputFile
+import csv, io, html
 
 from aiogram import Router, Bot, F
 from aiogram.filters import CommandStart, Command
@@ -17,6 +16,7 @@ from aiogram.types import (
     MenuButtonCommands,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
+    BufferedInputFile,
 )
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
@@ -24,7 +24,6 @@ from aiogram.fsm.context import FSMContext
 from sqlalchemy import select, delete
 
 from app.db import SessionLocal, Item
-from app.config import settings
 from app.utils import (
     parse_datetime_human,
     fmt_dt_human,
@@ -90,7 +89,14 @@ def choose_by_due_kb(prefix: str, items: list[Item], extra_row: list[InlineKeybo
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-# ---- helpers: длинный текст и CSV-экспорт для списка ----
+def date_copy_kb(date_str: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📤 Отправить дату", callback_data=f"send_date:{date_str}")],
+        [InlineKeyboardButton(text="📎 Вставить дату в поле", switch_inline_query_current_chat=date_str)],
+    ])
+
+
+# ---- helpers: длинный текст, CSV-экспорт и аккуратные таблицы без ID ----
 
 MESSAGE_LIMIT = 3900  # запас к лимиту 4096
 
@@ -108,24 +114,41 @@ def split_text_chunks(header: str, lines: list[str]) -> list[str]:
         chunks.append(current.rstrip())
     return chunks
 
+
 async def build_items_csv_bytes(items) -> bytes:
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(["user_id", "username", "due_date"])
     for it in items:
         # due_date в активной TZ, в строгом формате
-        from app.utils import fmt_dt_human
         w.writerow([it.user_id, it.username, fmt_dt_human(it.due_date)])
     data = buf.getvalue().encode("utf-8")
     buf.close()
     return data
-    
 
-def date_copy_kb(date_str: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📤 Отправить дату", callback_data=f"send_date:{date_str}")],
-        [InlineKeyboardButton(text="📎 Вставить дату в поле", switch_inline_query_current_chat=date_str)],
-    ])
+
+# Вариант A: фиксированные ширины колонок (по запросу)
+UID_W = 5        # ширина USERID (вправо)
+UNAME_W = 8      # ширина USERNAME (влево)
+# DUE DATE формируется fmt_dt_human как 'YYYY-MM-DD HH:MM:SS' (19 символов)
+
+def _trunc(s: str, width: int) -> str:
+    return s if len(s) <= width else (s[: max(0, width - 1)] + "…")
+
+def make_table_lines_without_id(items) -> tuple[str, list[str]]:
+    # Возвращает: (header, lines[]) — без ID колонки
+    header = f"{'USERID'.rjust(UID_W)} | {'USERNAME'.ljust(UNAME_W)} | DUE DATE"
+    rows: list[str] = []
+    for it in items:
+        uid = str(it.user_id).rjust(UID_W)
+        uname = _trunc(it.username, UNAME_W).ljust(UNAME_W)
+        due = fmt_dt_human(it.due_date)  # 19 символов
+        rows.append(f"{uid} | {uname} | {due}")
+    return header, rows
+
+def send_pre_chunk(message: Message, text: str):
+    # Обертка в <pre> и экранирование для Telegram HTML
+    return message.answer(f"<pre>{html.escape(text, quote=False)}</pre>", parse_mode="HTML")
 
 
 async def set_bot_commands(bot: Bot) -> None:
@@ -551,7 +574,8 @@ async def delete_confirm(message: Message, state: FSMContext) -> None:
 
     await state.clear()
     await message.answer(msg, reply_markup=main_menu_kb())
-    
+
+
 @router.callback_query(F.data == "list:export_csv")
 async def list_export_csv(cb: CallbackQuery) -> None:
     await cb.answer()
@@ -562,7 +586,7 @@ async def list_export_csv(cb: CallbackQuery) -> None:
     await cb.message.answer_document(
         BufferedInputFile(data, filename="clients_export.csv"),
         caption=f"Экспорт: {len(items)} записей"
-    )    
+    )
 
 
 # ==== Списки/ближайшие ====
@@ -578,15 +602,13 @@ async def on_list(message: Message) -> None:
         await message.answer("Список пуст.", reply_markup=main_menu_kb())
         return
 
-    from app.utils import fmt_dt_human
-    lines = [f"[{it.id}] {it.user_id} | {it.username} | {fmt_dt_human(it.due_date)}" for it in items]
-    header = "ID | USERID | USERNAME | DUE DATE\n" + "-" * 40
+    header, lines = make_table_lines_without_id(items)
     chunks = split_text_chunks(header, lines)
 
-    # Отправим 1–N сообщений с текстом
+    # Отправим 1–N сообщений с преформатированным текстом
     for i, ch in enumerate(chunks, 1):
-        suffix = f" (стр. {i}/{len(chunks)})" if len(chunks) > 1 else ""
-        await message.answer(ch + ("" if not suffix else "\n" + suffix))
+        suffix = f"\n(стр. {i}/{len(chunks)})" if len(chunks) > 1 else ""
+        await send_pre_chunk(message, ch + suffix)
 
     # Кнопка для экспорта CSV
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -608,18 +630,18 @@ async def on_disabled(message: Message) -> None:
         await message.answer("Отключённых (просроченных) нет.", reply_markup=main_menu_kb())
         return
 
-    lines = [f"[{it.id}] {it.user_id} | {it.username} | {fmt_dt_human(it.due_date)}" for it in expired]
-    header = "Disabled (просроченные):\n" + "-" * 40
+    header, lines = make_table_lines_without_id(expired)
+    header = "Disabled (просроченные):\n" + "-" * 40 + "\n" + header
     chunks = split_text_chunks(header, lines)
+
     for i, ch in enumerate(chunks, 1):
-        suffix = f" (стр. {i}/{len(chunks)})" if len(chunks) > 1 else ""
-        await message.answer(ch + ("" if not suffix else "\n" + suffix), reply_markup=main_menu_kb() if i == len(chunks) else None)
+        suffix = f"\n(стр. {i}/{len(chunks)})" if len(chunks) > 1 else ""
+        await send_pre_chunk(message, ch + suffix)
 
 
 @router.message(Command("next"))
 @router.message(F.text == "/next")
 async def on_next(message: Message) -> None:
-    from app.utils import now_tz, to_tz, fmt_dt_human
     now = now_tz()
     end = now + timedelta(days=3)
 
@@ -634,9 +656,10 @@ async def on_next(message: Message) -> None:
         await message.answer("Нет истечений в ближайшие 3 дня.", reply_markup=main_menu_kb())
         return
 
-    lines = [f"[{it.id}] {it.user_id} | {it.username} | {fmt_dt_human(it.due_date)}" for it in window]
-    header = "Ближайшие (до 3 дней):\n" + "-" * 40
+    header, lines = make_table_lines_without_id(window)
+    header = "Ближайшие (до 3 дней):\n" + "-" * 40 + "\n" + header
     chunks = split_text_chunks(header, lines)
+
     for i, ch in enumerate(chunks, 1):
-        suffix = f" (стр. {i}/{len(chunks)})" if len(chunks) > 1 else ""
-        await message.answer(ch + ("" if not suffix else "\n" + suffix), reply_markup=main_menu_kb() if i == len(chunks) else None)
+        suffix = f"\n(стр. {i}/{len(chunks)})" if len(chunks) > 1 else ""
+        await send_pre_chunk(message, ch + suffix)
