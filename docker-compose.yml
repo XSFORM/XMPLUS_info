@@ -16,7 +16,7 @@ services:
     env_file:
       - .env.serdar
     volumes:
-      - ./data:/app/data:ro  # чтение только
+      - ./data:/app/data  # чтение только
     command: ["python", "-m", "app.main"]
     depends_on:
       - xmplus
@@ -28,7 +28,7 @@ services:
     env_file:
       - .env.ilya
     volumes:
-      - ./data:/app/data:ro  # чтение только
+      - ./data:/app/data  # чтение только
     command: ["python", "-m", "app.main"]
     depends_on:
       - xmplus
