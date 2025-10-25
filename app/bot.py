@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone, timedelta
-import csv, io, html
+import csv, io, html, re
+from typing import List
 
 from aiogram import Router, Bot, F
 from aiogram.filters import CommandStart, Command
@@ -47,6 +48,7 @@ BOT_COMMANDS_ADMIN = [
     BotCommand(command="list", description="Список (отсортировано по дате)"),
     BotCommand(command="disabled", description="Список отключённых (просроченных)"),
     BotCommand(command="next", description="Ближайшие истечения"),
+    BotCommand(command="dealers", description="Раздел диллеры"),
     BotCommand(command="status", description="Статус бота"),
     BotCommand(command="timezone", description="Показать/сменить локальное время (TZ)"),
     BotCommand(command="cancel", description="Отменить текущий ввод"),
@@ -82,7 +84,8 @@ def main_menu_kb() -> ReplyKeyboardMarkup:
             [KeyboardButton(text="/list"), KeyboardButton(text="/disabled")],
             [KeyboardButton(text="/next"), KeyboardButton(text="/status")],
             [KeyboardButton(text="/delete"), KeyboardButton(text="/help")],
-            [KeyboardButton(text="/timezone"), KeyboardButton(text="/cancel")],
+            [KeyboardButton(text="/dealers"), KeyboardButton(text="/timezone")],
+            [KeyboardButton(text="/cancel"), KeyboardButton(text="/hide")],
         ],
         resize_keyboard=True,
         input_field_placeholder="Выберите команду…",
@@ -161,15 +164,11 @@ def dealer_filter(query):
 def ensure_allowed_user(message: Message) -> bool:
     if not is_dealer_mode():
         return True
-    # Ограничиваем доступ одним chat_id владельца дилер-бота
     if settings.OWNER_CHAT_ID and str(message.from_user.id) != str(settings.OWNER_CHAT_ID):
-        # Молча игнорируем или отвечаем:
-        # await message.answer("Доступ запрещён.")
         return False
     return True
 
 def ensure_admin_only():
-    # Хелпер для заглушек в dealer-режиме
     return "Эта команда недоступна в вашем боте. Обратитесь к администратору."
 
 async def set_bot_commands(bot: Bot) -> None:
@@ -389,15 +388,16 @@ async def renew_find_by_userid(message: Message, state: FSMContext) -> None:
         it = items[0]
         await state.update_data(item_id=it.id, user_id=it.user_id, username=it.username, old_due=fmt_dt_human(it.due_date))
         await state.set_state(RenewStates.waiting_new_due)
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📤 Отправить дату", callback_data=f"send_date:{fmt_dt_human(it.due_date)}")],
+            [InlineKeyboardButton(text="📎 Вставить дату в поле", switch_inline_query_current_chat=fmt_dt_human(it.due_date))],
+        ])
         await message.answer(
             "Клиент:\n"
             f"USERID: {it.user_id}\n"
             f"USERNAME: {it.username}\n"
             f"Текущая дата отключения: {fmt_dt_human(it.due_date)}",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="📤 Отправить дату", callback_data=f"send_date:{fmt_dt_human(it.due_date)}")],
-                [InlineKeyboardButton(text="📎 Вставить дату в поле", switch_inline_query_current_chat=fmt_dt_human(it.due_date))],
-            ]),
+            reply_markup=kb,
         )
         await message.answer("Отправьте новую дату в формате:\nYYYY-MM-DD HH:MM:SS", reply_markup=main_menu_kb())
         return
@@ -418,15 +418,16 @@ async def renew_choose_item(cb: CallbackQuery, state: FSMContext) -> None:
         return
     await state.update_data(item_id=it.id, user_id=it.user_id, username=it.username, old_due=fmt_dt_human(it.due_date))
     await state.set_state(RenewStates.waiting_new_due)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📤 Отправить дату", callback_data=f"send_date:{fmt_dt_human(it.due_date)}")],
+        [InlineKeyboardButton(text="📎 Вставить дату в поле", switch_inline_query_current_chat=fmt_dt_human(it.due_date))],
+    ])
     await cb.message.answer(
         "Клиент:\n"
         f"USERID: {it.user_id}\n"
         f"USERNAME: {it.username}\n"
         f"Текущая дата отключения: {fmt_dt_human(it.due_date)}",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📤 Отправить дату", callback_data=f"send_date:{fmt_dt_human(it.due_date)}")],
-            [InlineKeyboardButton(text="📎 Вставить дату в поле", switch_inline_query_current_chat=fmt_dt_human(it.due_date))],
-        ]),
+        reply_markup=kb,
     )
     await cb.message.answer("Отправьте новую дату в формате:\nYYYY-MM-DD HH:MM:SS", reply_markup=main_menu_kb())
 
@@ -656,14 +657,204 @@ async def on_next(message: Message) -> None:
         suffix = f"\n(стр. {i}/{len(chunks)})" if len(chunks) > 1 else ""
         await send_pre_chunk(message, ch + suffix)
 
-# ==== Заглушки для dealer-режима на админские команды (на случай, если дилер их введёт вручную) ====
+# ==== Раздел "Диллеры" (только админ) ====
+
+DEALER_CODES = ["serdar", "ilya", "main"]
+DEALER_TITLES = {"serdar": "Сердар", "ilya": "Иля", "main": "Без дилера"}
+
+def dealers_menu_kb() -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(text="👁 Сердар", callback_data="dealers:view:serdar"),
+         InlineKeyboardButton(text="⬇️ CSV Сердар", callback_data="dealers:export:serdar")],
+        [InlineKeyboardButton(text="👁 Иля", callback_data="dealers:view:ilya"),
+         InlineKeyboardButton(text="⬇️ CSV Иля", callback_data="dealers:export:ilya")],
+        [InlineKeyboardButton(text="👁 Без дилера", callback_data="dealers:view:main"),
+         InlineKeyboardButton(text="⬇️ CSV Без дилера", callback_data="dealers:export:main")],
+        [InlineKeyboardButton(text="📝 Назначить по списку USERID → дилер", callback_data="dealers:assign:start")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+async def dealers_counts_text() -> str:
+    async with SessionLocal() as session:
+        rows = (await session.execute(select(Item.dealer))).all()
+        # Быстрый подсчет в Python, чтобы не зависеть от разных значений
+        counts = {"serdar": 0, "ilya": 0, "main": 0}
+        for (d,) in rows:
+            if d not in counts:
+                counts["main"] += 1 if d is None else 0
+            else:
+                counts[d] += 1
+    return (
+        "Раздел диллеры:\n"
+        f"- Сердар: {counts.get('serdar', 0)}\n"
+        f"- Иля: {counts.get('ilya', 0)}\n"
+        f"- Без дилера: {counts.get('main', 0)}\n\n"
+        "Выберите действие:"
+    )
+
+@router.message(Command("dealers"))
+@router.message(F.text == "/dealers")
+async def dealers_home(message: Message, state: FSMContext) -> None:
+    if not ensure_allowed_user(message):
+        return
+    if is_dealer_mode():
+        await message.answer(ensure_admin_only(), reply_markup=main_menu_kb())
+        return
+    await state.clear()
+    text = await dealers_counts_text()
+    await message.answer(text, reply_markup=dealers_menu_kb())
+
+@router.callback_query(F.data.startswith("dealers:view:"))
+async def dealers_view(cb: CallbackQuery) -> None:
+    if is_dealer_mode():
+        await cb.answer("Недоступно", show_alert=False)
+        return
+    await cb.answer()
+    dealer = cb.data.split(":")[-1]
+    if dealer not in DEALER_TITLES:
+        await cb.message.answer("Неизвестный дилер.")
+        return
+    async with SessionLocal() as session:
+        q = select(Item).where(Item.dealer == dealer).order_by(Item.due_date.asc())
+        items = (await session.execute(q)).scalars().all()
+    title = DEALER_TITLES[dealer]
+    if not items:
+        await cb.message.answer(f"{title}: записей нет.", reply_markup=dealers_menu_kb())
+        return
+    header, lines = make_table_lines_without_id(items)
+    header = f"{title}:\n" + "-" * 40 + "\n" + header
+    chunks = split_text_chunks(header, lines)
+    for i, ch in enumerate(chunks, 1):
+        suffix = f"\n(стр. {i}/{len(chunks)})" if len(chunks) > 1 else ""
+        await send_pre_chunk(cb.message, ch + suffix)
+    await cb.message.answer(f"Всего записей ({title}): {len(items)}", reply_markup=dealers_menu_kb())
+
+@router.callback_query(F.data.startswith("dealers:export:"))
+async def dealers_export(cb: CallbackQuery) -> None:
+    if is_dealer_mode():
+        await cb.answer("Недоступно", show_alert=False)
+        return
+    await cb.answer()
+    dealer = cb.data.split(":")[-1]
+    if dealer not in DEALER_TITLES:
+        await cb.message.answer("Неизвестный дилер.")
+        return
+    async with SessionLocal() as session:
+        q = select(Item).where(Item.dealer == dealer).order_by(Item.due_date.asc())
+        items = (await session.execute(q)).scalars().all()
+    data = await build_items_csv_bytes(items)
+    title = DEALER_TITLES[dealer]
+    fname = f"export_{dealer}.csv"
+    await cb.message.answer_document(
+        BufferedInputFile(data, filename=fname),
+        caption=f"Экспорт {title}: {len(items)} записей"
+    )
+
+# ===== Массовое назначение по списку USERID → дилер (только админ) =====
+
+class DealerAssignStates(StatesGroup):
+    waiting_ids = State()
+    waiting_pick = State()
+
+@router.callback_query(F.data == "dealers:assign:start")
+async def dealers_assign_start(cb: CallbackQuery, state: FSMContext) -> None:
+    if is_dealer_mode():
+        await cb.answer("Недоступно", show_alert=False)
+        return
+    await cb.answer()
+    await state.clear()
+    await state.set_state(DealerAssignStates.waiting_ids)
+    await cb.message.answer(
+        "Отправьте список USERID через запятую/пробел/новую строку.\n"
+        "Пример: 1323, 2005, 1383\n"
+        "После этого предложу выбрать дилера.",
+        reply_markup=main_menu_kb(),
+    )
+
+def parse_user_ids(text: str) -> List[int]:
+    nums = re.findall(r"\d+", text or "")
+    ids = [int(x) for x in nums]
+    # уберем дубли сохранив порядок
+    seen = set()
+    out: List[int] = []
+    for i in ids:
+        if i not in seen:
+            seen.add(i)
+            out.append(i)
+    return out
+
+def dealers_pick_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Назначить → Сердар", callback_data="dealers:assign:pick:serdar")],
+        [InlineKeyboardButton(text="Назначить → Иля", callback_data="dealers:assign:pick:ilya")],
+        [InlineKeyboardButton(text="Назначить → Без дилера", callback_data="dealers:assign:pick:main")],
+    ])
+
+@router.message(DealerAssignStates.waiting_ids)
+async def dealers_assign_ids(message: Message, state: FSMContext) -> None:
+    if is_dealer_mode():
+        await message.answer(ensure_admin_only(), reply_markup=main_menu_kb())
+        return
+    ids = parse_user_ids(message.text or "")
+    if not ids:
+        await message.answer("Не удалось распознать ни одного USERID. Пришлите числа через запятую/пробел/строки или /cancel.")
+        return
+    await state.update_data(assign_ids=ids)
+    preview = ", ".join(str(x) for x in ids[:20]) + ("..." if len(ids) > 20 else "")
+    await state.set_state(DealerAssignStates.waiting_pick)
+    await message.answer(
+        f"Найдено USERID: {len(ids)}\n"
+        f"Пример: {preview}\n\n"
+        "Выберите дилера, которому назначить:",
+        reply_markup=dealers_pick_kb(),
+    )
+
+@router.callback_query(F.data.startswith("dealers:assign:pick:"))
+async def dealers_assign_pick(cb: CallbackQuery, state: FSMContext) -> None:
+    if is_dealer_mode():
+        await cb.answer("Недоступно", show_alert=False)
+        return
+    await cb.answer()
+    dealer = cb.data.split(":")[-1]
+    if dealer not in DEALER_TITLES:
+        await cb.message.answer("Неизвестный дилер.")
+        return
+    data = await state.get_data()
+    ids: List[int] = data.get("assign_ids", [])
+    if not ids:
+        await cb.message.answer("Список USERID не найден в состоянии. Начните заново: /dealers → Назначить по списку.")
+        return
+
+    async with SessionLocal() as session:
+        q = select(Item).where(Item.user_id.in_(ids))
+        items = (await session.execute(q)).scalars().all()
+        found = len(items)
+        changed = 0
+        for it in items:
+            if it.dealer != dealer:
+                it.dealer = dealer
+                changed += 1
+        await session.commit()
+
+    await state.clear()
+    title = DEALER_TITLES[dealer]
+    await cb.message.answer(
+        f"Готово. Передано дилеру: {title}\n"
+        f"- USERID в запросе: {len(ids)}\n"
+        f"- Найдено записей: {found}\n"
+        f"- Обновлено (изменён dealer): {changed}\n",
+        reply_markup=dealers_menu_kb(),
+    )
+
+# ==== Заглушки для dealer-режима на админские команды ====
 
 if is_dealer_mode():
     @router.message(Command("add"))
     @router.message(Command("renew"))
     @router.message(Command("delete"))
+    @router.message(Command("dealers"))
     @router.message(Command("timezone"))
-    @router.message(F.text.in_(["/add","/renew","/delete","/timezone","/cancel"]))
+    @router.message(F.text.in_(["/add","/renew","/delete","/dealers","/timezone","/cancel"]))
     async def dealer_stub(message: Message) -> None:
         if not ensure_allowed_user(message):
             return
