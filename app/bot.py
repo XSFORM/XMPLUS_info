@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone, timedelta
-import csv, io, html, re
+import csv, io, html, re, calendar
 from typing import List
 
 from aiogram import Router, Bot, F
@@ -359,6 +359,14 @@ class RenewStates(StatesGroup):
     waiting_new_due = State()
     waiting_confirm = State()
 
+def add_months(dt: datetime, months: int = 1) -> datetime:
+    # Добавляет календарные месяцы с корректировкой дня (конец месяца)
+    y = dt.year + (dt.month - 1 + months) // 12
+    m = (dt.month - 1 + months) % 12 + 1
+    last_day = calendar.monthrange(y, m)[1]
+    d = min(dt.day, last_day)
+    return dt.replace(year=y, month=m, day=d)
+
 @router.message(Command("renew"))
 @router.message(F.text == "/renew")
 async def renew_start(message: Message, state: FSMContext) -> None:
@@ -389,8 +397,8 @@ async def renew_find_by_userid(message: Message, state: FSMContext) -> None:
         await state.update_data(item_id=it.id, user_id=it.user_id, username=it.username, old_due=fmt_dt_human(it.due_date))
         await state.set_state(RenewStates.waiting_new_due)
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📤 Отправить дату", callback_data=f"send_date:{fmt_dt_human(it.due_date)}")],
-            [InlineKeyboardButton(text="📎 Вставить дату в поле", switch_inline_query_current_chat=fmt_dt_human(it.due_date))],
+            [InlineKeyboardButton(text="📤 Отправить текущую дату", callback_data=f"send_date:{fmt_dt_human(it.due_date)}")],
+            [InlineKeyboardButton(text="➕ Отправить +1 месяц", callback_data=f"send_date_plus_month:{fmt_dt_human(it.due_date)}")],
         ])
         await message.answer(
             "Клиент:\n"
@@ -419,8 +427,8 @@ async def renew_choose_item(cb: CallbackQuery, state: FSMContext) -> None:
     await state.update_data(item_id=it.id, user_id=it.user_id, username=it.username, old_due=fmt_dt_human(it.due_date))
     await state.set_state(RenewStates.waiting_new_due)
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📤 Отправить дату", callback_data=f"send_date:{fmt_dt_human(it.due_date)}")],
-        [InlineKeyboardButton(text="📎 Вставить дату в поле", switch_inline_query_current_chat=fmt_dt_human(it.due_date))],
+        [InlineKeyboardButton(text="📤 Отправить текущую дату", callback_data=f"send_date:{fmt_dt_human(it.due_date)}")],
+        [InlineKeyboardButton(text="➕ Отправить +1 месяц", callback_data=f"send_date_plus_month:{fmt_dt_human(it.due_date)}")],
     ])
     await cb.message.answer(
         "Клиент:\n"
@@ -487,6 +495,17 @@ async def send_date(cb: CallbackQuery) -> None:
     await cb.answer()
     date_str = cb.data.split(":", 1)[1]
     await cb.message.answer(date_str)
+
+@router.callback_query(F.data.startswith("send_date_plus_month:"))
+async def send_date_plus_month(cb: CallbackQuery) -> None:
+    await cb.answer()
+    date_str = cb.data.split(":", 1)[1]
+    dt = parse_datetime_human(date_str)
+    if not dt:
+        await cb.message.answer("Не удалось распознать дату. Введите вручную в формате YYYY-MM-DD HH:MM:SS.")
+        return
+    new_dt = add_months(dt, 1)
+    await cb.message.answer(fmt_dt_human(new_dt))
 
 # ==== Удаление по USERID (/delete) — только админ ====
 
@@ -677,7 +696,6 @@ def dealers_menu_kb() -> InlineKeyboardMarkup:
 async def dealers_counts_text() -> str:
     async with SessionLocal() as session:
         rows = (await session.execute(select(Item.dealer))).all()
-        # Быстрый подсчет в Python, чтобы не зависеть от разных значений
         counts = {"serdar": 0, "ilya": 0, "main": 0}
         for (d,) in rows:
             if d not in counts:
@@ -774,7 +792,6 @@ async def dealers_assign_start(cb: CallbackQuery, state: FSMContext) -> None:
 def parse_user_ids(text: str) -> List[int]:
     nums = re.findall(r"\d+", text or "")
     ids = [int(x) for x in nums]
-    # уберем дубли сохранив порядок
     seen = set()
     out: List[int] = []
     for i in ids:
