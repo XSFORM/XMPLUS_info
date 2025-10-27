@@ -136,7 +136,7 @@ async def build_items_csv_bytes(items) -> bytes:
     buf.close()
     return data
 
-# Вариант A: фиксированные ширины колонок (по запросу)
+# Вариант A: фиксированные ширины колонок
 UID_W = 5
 UNAME_W = 8
 
@@ -149,7 +149,7 @@ def make_table_lines_without_id(items) -> tuple[str, list[str]]:
     for it in items:
         uid = str(it.user_id).rjust(UID_W)
         uname = _trunc(it.username, UNAME_W).ljust(UNAME_W)
-        due = fmt_dt_human(it.due_date)  # 19 символов
+        due = fmt_dt_human(it.due_date)
         rows.append(f"{uid} | {uname} | {due}")
     return header, rows
 
@@ -231,7 +231,7 @@ async def on_status(message: Message) -> None:
         reply_markup=main_menu_kb(),
     )
 
-# ==== Таймзона: показ и переключение ====
+# ==== Таймзона ====
 
 def tz_switch_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -272,7 +272,7 @@ async def tz_set(cb: CallbackQuery) -> None:
     else:
         await cb.message.answer("❌ Не удалось установить часовой пояс. Проверьте логи.")
 
-# ==== Мастер добавления (только админ) ====
+# ==== Добавление (только админ) ====
 
 class AddStates(StatesGroup):
     waiting_user_id = State()
@@ -352,7 +352,7 @@ async def add_duedatetime(message: Message, state: FSMContext) -> None:
         reply_markup=main_menu_kb(),
     )
 
-# ==== Продление по USERID (/renew) — только админ ====
+# ==== Продление (/renew) — только админ ====
 
 class RenewStates(StatesGroup):
     waiting_userid = State()
@@ -360,12 +360,16 @@ class RenewStates(StatesGroup):
     waiting_confirm = State()
 
 def add_months(dt: datetime, months: int = 1) -> datetime:
-    # Добавляет календарные месяцы с корректировкой дня (конец месяца)
     y = dt.year + (dt.month - 1 + months) // 12
     m = (dt.month - 1 + months) % 12 + 1
     last_day = calendar.monthrange(y, m)[1]
     d = min(dt.day, last_day)
     return dt.replace(year=y, month=m, day=d)
+
+def confirm_with_edit_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ Изменить вручную", callback_data="renew:edit")],
+    ])
 
 @router.message(Command("renew"))
 @router.message(F.text == "/renew")
@@ -397,8 +401,8 @@ async def renew_find_by_userid(message: Message, state: FSMContext) -> None:
         await state.update_data(item_id=it.id, user_id=it.user_id, username=it.username, old_due=fmt_dt_human(it.due_date))
         await state.set_state(RenewStates.waiting_new_due)
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📤 Отправить текущую дату", callback_data=f"send_date:{fmt_dt_human(it.due_date)}")],
-            [InlineKeyboardButton(text="➕ Отправить +1 месяц", callback_data=f"send_date_plus_month:{fmt_dt_human(it.due_date)}")],
+            [InlineKeyboardButton(text="Подставить текущую", callback_data=f"renew:prefill:current:{it.id}")],
+            [InlineKeyboardButton(text="Подставить +1 месяц", callback_data=f"renew:prefill:plus1m:{it.id}")],
         ])
         await message.answer(
             "Клиент:\n"
@@ -427,8 +431,8 @@ async def renew_choose_item(cb: CallbackQuery, state: FSMContext) -> None:
     await state.update_data(item_id=it.id, user_id=it.user_id, username=it.username, old_due=fmt_dt_human(it.due_date))
     await state.set_state(RenewStates.waiting_new_due)
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📤 Отправить текущую дату", callback_data=f"send_date:{fmt_dt_human(it.due_date)}")],
-        [InlineKeyboardButton(text="➕ Отправить +1 месяц", callback_data=f"send_date_plus_month:{fmt_dt_human(it.due_date)}")],
+        [InlineKeyboardButton(text="Подставить текущую", callback_data=f"renew:prefill:current:{it.id}")],
+        [InlineKeyboardButton(text="Подставить +1 месяц", callback_data=f"renew:prefill:plus1m:{it.id}")],
     ])
     await cb.message.answer(
         "Клиент:\n"
@@ -438,6 +442,58 @@ async def renew_choose_item(cb: CallbackQuery, state: FSMContext) -> None:
         reply_markup=kb,
     )
     await cb.message.answer("Отправьте новую дату в формате:\nYYYY-MM-DD HH:MM:SS", reply_markup=main_menu_kb())
+
+@router.callback_query(F.data.startswith("renew:prefill:"))
+async def renew_prefill(cb: CallbackQuery, state: FSMContext) -> None:
+    await cb.answer()
+    try:
+        _, _, kind, item_id_str = cb.data.split(":")
+        item_id = int(item_id_str)
+    except Exception:
+        await cb.message.answer("Ошибка выбора записи. Повторите /renew.")
+        return
+
+    async with SessionLocal() as session:
+        it = await session.get(Item, item_id)
+    if not it:
+        await cb.message.answer("Запись не найдена. Повторите /renew.")
+        return
+
+    base_dt = to_tz(it.due_date)
+    if kind == "plus1m":
+        new_dt = add_months(base_dt, 1)
+    else:
+        new_dt = base_dt
+
+    # Заполняем состояние и сразу показываем подтверждение
+    await state.update_data(item_id=it.id, user_id=it.user_id, username=it.username,
+                            old_due=fmt_dt_human(base_dt), new_due=fmt_dt_human(new_dt))
+    await state.set_state(RenewStates.waiting_confirm)
+    await cb.message.answer(
+        "Подтвердите продление:\n"
+        f"USERID: {it.user_id}\n"
+        f"USERNAME: {it.username}\n"
+        f"Было: {fmt_dt_human(base_dt)}\n"
+        f"Станет: {fmt_dt_human(new_dt)}",
+        reply_markup=confirm_kb(),
+    )
+    # Кнопка для возврата к ручному вводу (если хотите поправить дату)
+    await cb.message.answer("Хотите поправить дату вручную? Нажмите кнопку ниже и введите новую дату:", reply_markup=confirm_with_edit_kb())
+
+@router.callback_query(F.data == "renew:edit")
+async def renew_edit(cb: CallbackQuery, state: FSMContext) -> None:
+    await cb.answer()
+    data = await state.get_data()
+    suggested = data.get("new_due")
+    await state.set_state(RenewStates.waiting_new_due)
+    if suggested:
+        await cb.message.answer(
+            "Отправьте новую дату в формате:\nYYYY-MM-DD HH:MM:SS\n"
+            f"Подсказка: {suggested}",
+            reply_markup=main_menu_kb(),
+        )
+    else:
+        await cb.message.answer("Отправьте новую дату в формате:\nYYYY-MM-DD HH:MM:SS", reply_markup=main_menu_kb())
 
 @router.message(RenewStates.waiting_new_due)
 async def renew_get_new_due(message: Message, state: FSMContext) -> None:
@@ -452,12 +508,13 @@ async def renew_get_new_due(message: Message, state: FSMContext) -> None:
     await state.set_state(RenewStates.waiting_confirm)
     await message.answer(
         "Подтвердите продление:\n"
-        f"USERID: {data['user_id']}\n"
-        f"USERNAME: {data['username']}\n"
-        f"Было: {data['old_due']}\n"
+        f"USERID: {data.get('user_id')}\n"
+        f"USERNAME: {data.get('username')}\n"
+        f"Было: {data.get('old_due')}\n"
         f"Станет: {new_due}",
         reply_markup=confirm_kb(),
     )
+    await message.answer("Если хотите скорректировать ещё раз, нажмите ниже:", reply_markup=confirm_with_edit_kb())
 
 @router.message(RenewStates.waiting_confirm)
 async def renew_confirm(message: Message, state: FSMContext) -> None:
@@ -490,24 +547,7 @@ async def renew_confirm(message: Message, state: FSMContext) -> None:
         reply_markup=main_menu_kb(),
     )
 
-@router.callback_query(F.data.startswith("send_date:"))
-async def send_date(cb: CallbackQuery) -> None:
-    await cb.answer()
-    date_str = cb.data.split(":", 1)[1]
-    await cb.message.answer(date_str)
-
-@router.callback_query(F.data.startswith("send_date_plus_month:"))
-async def send_date_plus_month(cb: CallbackQuery) -> None:
-    await cb.answer()
-    date_str = cb.data.split(":", 1)[1]
-    dt = parse_datetime_human(date_str)
-    if not dt:
-        await cb.message.answer("Не удалось распознать дату. Введите вручную в формате YYYY-MM-DD HH:MM:SS.")
-        return
-    new_dt = add_months(dt, 1)
-    await cb.message.answer(fmt_dt_human(new_dt))
-
-# ==== Удаление по USERID (/delete) — только админ ====
+# ==== Удаление — только админ ====
 
 class DeleteStates(StatesGroup):
     waiting_userid = State()
@@ -612,7 +652,7 @@ async def list_export_csv(cb: CallbackQuery) -> None:
         caption=f"Экспорт: {len(items)} записей"
     )
 
-# ==== Списки/ближайшие ====
+# ==== Списки ====
 
 @router.message(Command("list"))
 @router.message(F.text == "/list")
@@ -863,7 +903,7 @@ async def dealers_assign_pick(cb: CallbackQuery, state: FSMContext) -> None:
         reply_markup=dealers_menu_kb(),
     )
 
-# ==== Заглушки для dealer-режима на админские команды ====
+# ==== Заглушки для dealer-режима ====
 
 if is_dealer_mode():
     @router.message(Command("add"))
