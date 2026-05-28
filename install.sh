@@ -248,7 +248,7 @@ restore_from_backup() {
   echo
 
   # Проверяем наличие базы данных (ищем data.db в любом пути)
-  if ! unzip -l "$selected" | grep -qE "data\.db\b"; then
+  if ! unzip -l "$selected" | grep -q "data\.db"; then
     echo "ОШИБКА: архив не содержит data.db — это не бэкап XMPLUS." >&2
     exit 1
   fi
