@@ -242,25 +242,47 @@ restore_from_backup() {
   echo
   echo "[*] Распаковка: $selected_name ..."
 
-  # Проверяем содержимое
-  if ! unzip -l "$selected" | grep -q "data/data.db"; then
-    echo "ОШИБКА: архив не содержит data/data.db — это не бэкап XMPLUS." >&2
+  # Показываем содержимое архива
+  echo "[*] Содержимое архива:"
+  unzip -l "$selected"
+  echo
+
+  # Проверяем наличие базы данных (ищем data.db в любом пути)
+  if ! unzip -l "$selected" | grep -qE "data\.db\b"; then
+    echo "ОШИБКА: архив не содержит data.db — это не бэкап XMPLUS." >&2
     exit 1
   fi
 
-  # Распаковываем БД
-  unzip -o "$selected" "data/data.db" -d "$INSTALL_DIR"
-  echo "[*] База данных восстановлена."
+  # Распаковываем всё во временную папку, потом раскладываем
+  local tmp_restore="$INSTALL_DIR/_restore_tmp"
+  rm -rf "$tmp_restore"
+  mkdir -p "$tmp_restore"
+  unzip -o "$selected" -d "$tmp_restore"
 
-  # Распаковываем .tz_override если есть
-  if unzip -l "$selected" | grep -q ".tz_override"; then
-    unzip -o "$selected" ".tz_override" -d "$INSTALL_DIR"
+  # Ищем data.db в распакованном архиве (на любой глубине)
+  local found_db=""
+  found_db=$(find "$tmp_restore" -name "data.db" -type f | head -1)
+  if [ -z "$found_db" ]; then
+    echo "ОШИБКА: data.db не найден в архиве." >&2
+    rm -rf "$tmp_restore"
+    exit 1
+  fi
+  cp -f "$found_db" "$INSTALL_DIR/data/data.db"
+  echo "[*] База данных восстановлена: $(du -h "$INSTALL_DIR/data/data.db" | cut -f1)"
+
+  # Восстанавливаем .tz_override если есть
+  local found_tz=""
+  found_tz=$(find "$tmp_restore" -name ".tz_override" -type f | head -1)
+  if [ -n "$found_tz" ]; then
+    cp -f "$found_tz" "$INSTALL_DIR/.tz_override"
     echo "[*] Часовой пояс восстановлен."
   fi
 
-  # Распаковываем .env если есть
-  if unzip -l "$selected" | grep -q "^.*\.env$"; then
-    unzip -o "$selected" ".env" -d "$INSTALL_DIR"
+  # Восстанавливаем .env если есть
+  local found_env=""
+  found_env=$(find "$tmp_restore" -name ".env" -type f | head -1)
+  if [ -n "$found_env" ]; then
+    cp -f "$found_env" "$INSTALL_DIR/.env"
     echo "[*] .env восстановлен из бэкапа."
     echo
     echo "--- Текущие настройки (.env) ---"
@@ -276,6 +298,7 @@ restore_from_backup() {
     prompt_env_fresh
   fi
 
+  rm -rf "$tmp_restore"
   echo "[*] Восстановление завершено."
 }
 
@@ -292,22 +315,23 @@ run_compose() {
     compose_cmd="docker-compose"
   fi
 
-  echo "[*] Building and starting services ..."
-  (cd "$INSTALL_DIR" && $compose_cmd up --build -d)
+  echo "[*] Building and starting containers ..."
+  cd "$INSTALL_DIR"
+  $compose_cmd up -d --build
 
   echo
   echo "============================================"
-  echo "  XMPLUS — Установка завершена!"
+  echo "  XMPLUS установлен и запущен!"
   echo "============================================"
   echo
-  echo "  Логи:      cd $INSTALL_DIR && $compose_cmd logs -f xmplus"
-  echo "  Рестарт:   cd $INSTALL_DIR && $compose_cmd restart"
-  echo "  Остановка: cd $INSTALL_DIR && $compose_cmd down"
+  echo "  Логи:       cd $INSTALL_DIR && $compose_cmd logs -f xmplus"
+  echo "  Перезапуск: cd $INSTALL_DIR && $compose_cmd restart"
+  echo "  Остановка:  cd $INSTALL_DIR && $compose_cmd down"
   echo
 }
 
 # =============================================
-#  main
+#  Точка входа
 # =============================================
 
 main() {
@@ -316,7 +340,6 @@ main() {
   ensure_docker
   ensure_compose
   clone_or_update_repo
-
   choose_install_mode
 
   if [ "$RESTORE_MODE" = true ]; then

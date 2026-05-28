@@ -2999,6 +2999,24 @@ async def backup_home_cb(cb: CallbackQuery, state: FSMContext) -> None:
     await cb.message.answer("💾 Бэкап базы данных\n\nВыберите действие:", reply_markup=backup_menu_kb())
 
 
+def _find_db_path() -> "Path | None":
+    """Найти файл БД: пробуем несколько вариантов пути."""
+    candidates = [
+        Path("/app/data/data.db"),       # абсолютный путь в Docker
+        Path("./data/data.db"),          # относительный (WORKDIR /app)
+        Path("data/data.db"),            # без ./
+    ]
+    # Также пробуем извлечь путь из DATABASE_URL
+    url = os.environ.get("DATABASE_URL", "")
+    if ":///" in url:
+        raw = url.split("///", 1)[1].split("?")[0]
+        candidates.insert(0, Path(raw))
+    for p in candidates:
+        if p.exists():
+            return p
+    return None
+
+
 @router.callback_query(F.data == "backup:create")
 async def backup_create(cb: CallbackQuery) -> None:
     await cb.answer("Создаю бэкап…")
@@ -3008,8 +3026,17 @@ async def backup_create(cb: CallbackQuery) -> None:
     zip_name = f"xmplus_backup_{ts}.zip"
     zip_path = BACKUP_DIR / zip_name
 
-    db_path = Path("./data/data.db")
+    db_path = _find_db_path()
     tz_path = Path("/app/.tz_override")
+
+    if not db_path:
+        await cb.message.answer(
+            "❌ Файл базы данных не найден!\n"
+            f"DATABASE_URL: {os.environ.get('DATABASE_URL', '(не задан)')}\n"
+            f"CWD: {Path.cwd()}",
+            reply_markup=backup_menu_kb(),
+        )
+        return
 
     try:
         # Сохраняем переменные окружения (.env)
@@ -3022,11 +3049,20 @@ async def backup_create(cb: CallbackQuery) -> None:
         env_content = "\n".join(env_lines) + "\n"
 
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-            if db_path.exists():
-                zf.write(db_path, "data/data.db")
+            zf.write(db_path, "data/data.db")
             zf.writestr(".env", env_content)
             if tz_path.exists():
                 zf.write(tz_path, ".tz_override")
+
+        # Проверяем что data.db действительно попало в архив
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            names = zf.namelist()
+        if "data/data.db" not in names:
+            await cb.message.answer(
+                f"❌ Ошибка: data/data.db не в архиве.\nСодержимое: {names}",
+                reply_markup=backup_menu_kb(),
+            )
+            return
 
         size_kb = zip_path.stat().st_size / 1024
         with open(zip_path, "rb") as f:
@@ -3036,7 +3072,7 @@ async def backup_create(cb: CallbackQuery) -> None:
             caption=(
                 f"📦 Бэкап создан: {zip_name}\n"
                 f"Размер: {size_kb:.1f} KB\n"
-                "Содержимое: база данных, .env, часовой пояс"
+                f"Содержимое: {', '.join(names)}"
             ),
         )
         await cb.message.answer(
