@@ -8,27 +8,3 @@ services:
     volumes:
       - ./data:/app/data
     command: ["python", "-m", "app.main"]
-
-  xmplus-serdar:
-    build: .
-    container_name: xmplus-serdar
-    restart: always
-    env_file:
-      - .env.serdar
-    volumes:
-      - ./data:/app/data  # чтение только
-    command: ["python", "-m", "app.main"]
-    depends_on:
-      - xmplus
-
-  xmplus-ilya:
-    build: .
-    container_name: xmplus-ilya
-    restart: always
-    env_file:
-      - .env.ilya
-    volumes:
-      - ./data:/app/data  # чтение только
-    command: ["python", "-m", "app.main"]
-    depends_on:
-      - xmplus

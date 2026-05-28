@@ -3,6 +3,7 @@ set -euo pipefail
 
 REPO_URL="https://github.com/XSFORM/XMPLUS_info.git"
 INSTALL_DIR="/opt/xmplus"
+BACKUP_DIR="$INSTALL_DIR/backup"
 
 need() { command -v "$1" >/dev/null 2>&1; }
 
@@ -39,11 +40,13 @@ ensure_basics() {
   local mgr
   mgr=$(detect_pkg_mgr)
   if [ -n "$mgr" ]; then
-    need curl || pkg_install "$mgr" curl
-    need git  || pkg_install "$mgr" git
+    need curl  || pkg_install "$mgr" curl
+    need git   || pkg_install "$mgr" git
+    need unzip || pkg_install "$mgr" unzip
   else
-    need curl || { echo "curl is required"; exit 1; }
-    need git  || { echo "git is required"; exit 1; }
+    need curl  || { echo "curl is required"; exit 1; }
+    need git   || { echo "git is required"; exit 1; }
+    need unzip || { echo "unzip is required"; exit 1; }
   fi
 }
 
@@ -103,7 +106,6 @@ clone_or_update_repo() {
 
 # Универсальный вопрос: читает из /dev/tty, чтобы работать даже при "curl ... | bash"
 ask() {
-  # usage: ask "Prompt: " VAR [default]
   local prompt="$1"; shift
   local __var="$1"; shift
   local def="${1:-}"
@@ -112,7 +114,6 @@ ask() {
   if [ -t 0 ]; then
     read -rp "$prompt" input
   else
-    # читаем из терминала, даже если stdin — это pipe
     read -rp "$prompt" input </dev/tty
   fi
 
@@ -123,11 +124,35 @@ ask() {
   fi
 }
 
-prompt_env() {
-  echo
-  echo "=== XMPLUS configuration ==="
+# =============================================
+#  Режим установки: Новая или Восстановление
+# =============================================
 
-  # Разрешаем передать заранее через переменные окружения, иначе спросим
+choose_install_mode() {
+  echo
+  echo "============================================"
+  echo "  XMPLUS — Установка"
+  echo "============================================"
+  echo
+  echo "  1) Новая установка"
+  echo "  2) Восстановление из бэкапа"
+  echo
+  ask "Выберите [1/2]: " INSTALL_MODE "1"
+
+  case "$INSTALL_MODE" in
+    2) RESTORE_MODE=true ;;
+    *) RESTORE_MODE=false ;;
+  esac
+}
+
+# =============================================
+#  Новая установка — спрашивает токен и т.д.
+# =============================================
+
+prompt_env_fresh() {
+  echo
+  echo "=== Новая установка — настройка ==="
+
   BOT_TOKEN=${BOT_TOKEN:-}
   OWNER_CHAT_ID=${OWNER_CHAT_ID:-}
   DEALER_NAME=${DEALER_NAME:-}
@@ -137,10 +162,10 @@ prompt_env() {
     ask "Enter BOT_TOKEN: " BOT_TOKEN
   fi
   if [ -z "${OWNER_CHAT_ID:-}" ]; then
-    ask "Enter OWNER_CHAT_ID (numeric, optional, just ENTER to skip): " OWNER_CHAT_ID
+    ask "Enter OWNER_CHAT_ID (numeric, optional, ENTER to skip): " OWNER_CHAT_ID
   fi
   ask "Dealer name [main]: " DEALER_NAME "main"
-  ask "Timezone [Europe/Moscow]: " TIMEZONE "Europe/Moscow"
+  ask "Timezone [Asia/Ashgabat]: " TIMEZONE "Asia/Ashgabat"
 
   CHECK_INTERVAL_MINUTES=${CHECK_INTERVAL_MINUTES:-1}
   NOTIFY_EVERY_MINUTES=${NOTIFY_EVERY_MINUTES:-180}
@@ -162,25 +187,128 @@ EOF
   echo "[*] .env written to $INSTALL_DIR/.env"
 }
 
-run_compose() {
+# =============================================
+#  Восстановление из бэкапа
+# =============================================
+
+restore_from_backup() {
+  echo
+  echo "=== Восстановление из бэкапа ==="
+  echo
+
+  mkdir -p "$BACKUP_DIR"
   mkdir -p "$INSTALL_DIR/data"
 
-  if docker compose version >/dev/null 2>&1; then
-    echo "[*] Building and starting services with docker compose..."
-    (cd "$INSTALL_DIR" && docker compose up --build -d)
-  else
-    echo "[*] Building and starting services with docker-compose..."
-    (cd "$INSTALL_DIR" && docker-compose up --build -d)
+  # Ищем ZIP-файлы в backup/
+  local zips=()
+  while IFS= read -r -d $'\0' f; do
+    zips+=("$f")
+  done < <(find "$BACKUP_DIR" -maxdepth 1 -name "*.zip" -print0 2>/dev/null | sort -z -r)
+
+  if [ ${#zips[@]} -eq 0 ]; then
+    echo "В папке $BACKUP_DIR нет ZIP-архивов."
+    echo
+    echo "Сначала загрузите бэкап на сервер, например:"
+    echo "  scp xmplus_backup_XXXXXXXX_XXXXXX.zip root@YOUR_SERVER:$BACKUP_DIR/"
+    echo
+    echo "Затем запустите установку повторно."
+    exit 1
   fi
 
+  echo "Найденные бэкапы:"
+  local i=1
+  for f in "${zips[@]}"; do
+    local fname
+    fname=$(basename "$f")
+    local fsize
+    fsize=$(du -h "$f" | cut -f1)
+    echo "  $i) $fname ($fsize)"
+    i=$((i + 1))
+  done
   echo
-  echo "=== Done ==="
-  if docker compose version >/dev/null 2>&1; then
-    echo "View logs:  cd $INSTALL_DIR && docker compose logs -f xmplus"
-  else
-    echo "View logs:  cd $INSTALL_DIR && docker-compose logs -f xmplus"
+
+  local choice
+  ask "Выберите номер бэкапа [1]: " choice "1"
+  local idx=$((choice - 1))
+
+  if [ "$idx" -lt 0 ] || [ "$idx" -ge "${#zips[@]}" ]; then
+    echo "Неверный выбор." >&2
+    exit 1
   fi
+
+  local selected="${zips[$idx]}"
+  local selected_name
+  selected_name=$(basename "$selected")
+  echo
+  echo "[*] Распаковка: $selected_name ..."
+
+  # Проверяем содержимое
+  if ! unzip -l "$selected" | grep -q "data/data.db"; then
+    echo "ОШИБКА: архив не содержит data/data.db — это не бэкап XMPLUS." >&2
+    exit 1
+  fi
+
+  # Распаковываем БД
+  unzip -o "$selected" "data/data.db" -d "$INSTALL_DIR"
+  echo "[*] База данных восстановлена."
+
+  # Распаковываем .tz_override если есть
+  if unzip -l "$selected" | grep -q ".tz_override"; then
+    unzip -o "$selected" ".tz_override" -d "$INSTALL_DIR"
+    echo "[*] Часовой пояс восстановлен."
+  fi
+
+  # Распаковываем .env если есть
+  if unzip -l "$selected" | grep -q "^.*\.env$"; then
+    unzip -o "$selected" ".env" -d "$INSTALL_DIR"
+    echo "[*] .env восстановлен из бэкапа."
+    echo
+    echo "--- Текущие настройки (.env) ---"
+    cat "$INSTALL_DIR/.env"
+    echo "--------------------------------"
+    echo
+    ask "Хотите изменить настройки? (y/n) [n]: " EDIT_ENV "n"
+    if [ "$EDIT_ENV" = "y" ] || [ "$EDIT_ENV" = "Y" ]; then
+      prompt_env_fresh
+    fi
+  else
+    echo "[!] Архив не содержит .env — потребуется настроить вручную."
+    prompt_env_fresh
+  fi
+
+  echo "[*] Восстановление завершено."
 }
+
+# =============================================
+#  Запуск docker compose
+# =============================================
+
+run_compose() {
+  mkdir -p "$INSTALL_DIR/data"
+  mkdir -p "$BACKUP_DIR"
+
+  local compose_cmd="docker compose"
+  if ! docker compose version >/dev/null 2>&1; then
+    compose_cmd="docker-compose"
+  fi
+
+  echo "[*] Building and starting services ..."
+  (cd "$INSTALL_DIR" && $compose_cmd up --build -d)
+
+  echo
+  echo "============================================"
+  echo "  XMPLUS — Установка завершена!"
+  echo "============================================"
+  echo
+  echo "  Логи:      cd $INSTALL_DIR && $compose_cmd logs -f xmplus"
+  echo "  Рестарт:   cd $INSTALL_DIR && $compose_cmd restart"
+  echo "  Остановка: cd $INSTALL_DIR && $compose_cmd down"
+  echo
+}
+
+# =============================================
+#  main
+# =============================================
 
 main() {
   ensure_root
@@ -188,7 +316,15 @@ main() {
   ensure_docker
   ensure_compose
   clone_or_update_repo
-  prompt_env
+
+  choose_install_mode
+
+  if [ "$RESTORE_MODE" = true ]; then
+    restore_from_backup
+  else
+    prompt_env_fresh
+  fi
+
   run_compose
 }
 

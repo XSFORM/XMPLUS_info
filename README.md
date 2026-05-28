@@ -1,75 +1,137 @@
 # XMPLUS_info
 
-Телеграм-бот уведомлений об истечении сроков (XMPLUS).
+Телеграм-бот управления подписками и уведомлений об истечении сроков (XMPLUS).
 
-## Автоустановка
+## Требования
 
-Рекомендуемый запуск (stdin — ваш терминал, вопросы будут заданы корректно):
+- Ubuntu 20.04–24.04 или Debian 10–13
+- Docker и Docker Compose (установщик поставит автоматически)
+
+## Быстрая установка
+
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/XSFORM/XMPLUS_info/main/install.sh)"
 ```
 
-Альтернатива:
-```bash
-curl -fsSL https://raw.githubusercontent.com/XSFORM/XMPLUS_info/main/install.sh -o install.sh
-bash install.sh
+Установщик предложит два варианта:
+
+1. **Новая установка** — спросит BOT_TOKEN, OWNER_CHAT_ID и создаст чистую базу.
+2. **Восстановление из бэкапа** — восстановит базу данных, .env и настройки из ZIP-архива.
+
+## Восстановление из бэкапа при переустановке
+
+Если вы переустанавливаете сервер и у вас есть бэкап (ZIP-архив из бота), выполните следующие шаги.
+
+### Шаг 1: Загрузите бэкап на сервер
+
+Из PowerShell (Windows):
+```powershell
+scp C:\Users\Berdi\Documents\GitHub\XMPLUS_info\backup\xmplus_backup_XXXXXXXX_XXXXXX.zip root@YOUR_SERVER_IP:/opt/xmplus/backup/
 ```
 
-Полная автоустановка на чистой Ubuntu/Debian:
+Если папка ещё не существует (первый запуск), создайте её:
 ```bash
-bash -c 'set -e; apt-get update; apt-get install -y curl git; curl -fsSL https://get.docker.com | sh; curl -fsSL https://raw.githubusercontent.com/XSFORM/XMPLUS_info/main/install.sh -o /tmp/install.sh; bash /tmp/install.sh'
+ssh root@YOUR_SERVER_IP "mkdir -p /opt/xmplus/backup"
 ```
 
-Неинтерактивно (через переменные окружения):
-```bash
-BOT_TOKEN=XXX OWNER_CHAT_ID=123456 bash -c "$(curl -fsSL https://raw.githubusercontent.com/XSFORM/XMPLUS_info/main/install.sh)"
+А затем загрузите:
+```powershell
+scp C:\path\to\xmplus_backup_XXXXXXXX_XXXXXX.zip root@YOUR_SERVER_IP:/opt/xmplus/backup/
 ```
 
-Логи после установки:
+Из Linux/Mac:
 ```bash
-cd /opt/xmplus && docker compose logs -f xmplus
+scp xmplus_backup_XXXXXXXX_XXXXXX.zip root@YOUR_SERVER_IP:/opt/xmplus/backup/
 ```
 
-## Команды бота (в меню Telegram)
-Бот регистрирует команды (кнопка-меню — иконка с точками):
-- `/start` — запуск
-- `/help` — справка
-- `/add` — добавить запись: `/add Название; 2025-12-31`
-- `/list` — список записей
-- `/remove <id>` — удалить запись
-- `/next` — ближайшие истечения
+### Шаг 2: Запустите установку
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/XSFORM/XMPLUS_info/main/install.sh)"
+```
+
+При вопросе выберите `2` (Восстановление из бэкапа). Установщик покажет список найденных архивов, вы выберете нужный, и он восстановит базу данных и настройки.
+
+## Создание бэкапа
+
+В боте: нажмите **💾 Бэкап** → **📦 Создать бэкап**. Бот создаст ZIP-архив и отправит вам файлом. Архив содержит:
+- Базу данных (клиенты, дилеры, балансы, платежи, настройки)
+- Конфигурацию .env (токен бота, ID администратора)
+- Настройки часового пояса
+
+## Команды бота
+
+### Администратор
+- `/start` — запуск бота
+- `/help` — справка по командам
+- `/add` — добавить клиента (мастер: USERID → USERNAME → дата/время)
+- `/renew` — продлить по USERID
+- `/delete` — удалить по USERID (с подтверждением)
+- `/list` — список клиентов (отсортировано по дате)
+- `/disabled` — список отключённых (просроченных)
+- `/next` — ближайшие истечения (3 дня)
+- `/dealers` — раздел дилеров
+- `/balance` — балансы и долги дилеров
+- `/pay` — методы оплаты
+- `/backup` — бэкап базы данных (создать / восстановить / список)
+- `/timezone` — показать/сменить часовой пояс
 - `/status` — статус бота
 
-## CSV импорт
-Скрипт: `scripts/import_csv.py`
+### Дилер
+- `/list` — список своих клиентов
+- `/disabled` — просроченные (свои)
+- `/next` — ближайшие истечения (свои)
+- `/renew` — запрос на продление
+- `/order` — заказать новые ключи
+- `/balance` — свой баланс (долг)
+- `/pay` — оплата и реквизиты
 
-Формат CSV (UTF-8):
-```csv
-title,expires_at,chat_id
-Домен example.com,2025-12-31,
-Сертификат api.example.com,31.01.2026,123456789
-```
-Поддерживаемые форматы дат: `YYYY-MM-DD`, `DD.MM.YYYY`, и т.п.
+## Настройки (.env)
 
-Запуск:
-```bash
-docker compose exec xmplus python scripts/import_csv.py /app/data/clients.csv
-```
-(файл положить в `./data/clients.csv` на хосте)
-
-## Настройки
-Переменные `.env`:
 ```
 BOT_TOKEN=...
 OWNER_CHAT_ID=...
 DEALER_NAME=main
-TIMEZONE=Europe/Moscow
+TIMEZONE=Asia/Ashgabat
 CHECK_INTERVAL_MINUTES=1
 NOTIFY_EVERY_MINUTES=180
 MAX_NOTIFICATIONS=9
 DATABASE_URL=sqlite+aiosqlite:///./data/data.db
 ```
 
-## Заметки
-- По умолчанию — SQLite в `./data/data.db`. Для Postgres: `DATABASE_URL=postgresql+psycopg://user:pass@host:5432/dbname`.
-- Предупреждение про `version:` в `docker-compose.yml` можно игнорировать или удалить строку.
+## Управление
+
+```bash
+# Логи
+cd /opt/xmplus && docker compose logs -f xmplus
+
+# Перезапуск
+cd /opt/xmplus && docker compose restart
+
+# Остановка
+cd /opt/xmplus && docker compose down
+
+# Обновление (git pull + пересборка)
+cd /opt/xmplus && git pull && docker compose up -d --build
+```
+
+## Структура проекта
+
+```
+XMPLUS_info/
+├── app/
+│   ├── bot.py         # Логика бота (команды, FSM, клавиатуры)
+│   ├── config.py      # Настройки из переменных окружения
+│   ├── db.py          # Модели БД (SQLAlchemy) и миграции
+│   ├── jobs.py        # Уведомления о просрочках
+│   ├── main.py        # Точка входа
+│   ├── scheduler.py   # APScheduler
+│   └── utils.py       # Часовые пояса, форматирование дат
+├── backup/            # Папка для бэкапов (при переустановке)
+├── data/              # БД и рабочие данные (создаётся автоматически)
+├── deploy/            # Systemd-сервис (альтернатива Docker)
+├── docker-compose.yml
+├── Dockerfile
+├── install.sh         # Автоустановщик
+└── requirements.txt
+```

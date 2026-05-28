@@ -6,43 +6,45 @@ from aiogram import Bot
 from sqlalchemy import select
 
 from app.config import settings
-from app.db import SessionLocal, Item
+from app.db import SessionLocal, Item, Dealer
 from app.utils import now_tz, fmt_dt_human, tz_offset_str, to_tz
 
 
 async def check_expiries(bot: Bot) -> None:
     """
-    Уведомления по каждому Item:
-    - 1-й раз: когда до due_date осталось <= PRE_NOTIFY_HOURS (и ещё не наступил срок).
-    - 2-й раз: ровно один раз после наступления due_date (о просрочке).
-    Кол-во уведомлений ограничено MAX_NOTIFICATIONS.
+    Уведомления по всем записям. В единой схеме их шлёт ТОЛЬКО admin-бот:
+    - записи 'main' → администратору (или в chat_id записи);
+    - записи дилера → этому дилеру (по chat_id из таблицы dealers).
+    Дилер-контейнеры (legacy) уведомления больше не отправляют.
 
-    Фильтрация по режиму бота:
-    - admin-бот: только dealer='main'
-    - dealer-бот: только записи своего дилера (dealer == DEALER_NAME) и отправка в OWNER_CHAT_ID дилера.
+    На каждую запись:
+    - 1-й раз: когда до due_date осталось <= PRE_NOTIFY_HOURS (и срок ещё не наступил);
+    - 2-й раз: один раз после наступления due_date (о просрочке).
+    Счётчик notified_count растёт только при успешной отправке — поэтому,
+    если получатель недоступен, уведомление повторяется, пока не дойдёт.
     """
+    if settings.BOT_MODE == "dealer":
+        return
+
     now = now_tz()
     pre_hours = settings.PRE_NOTIFY_HOURS
     tz_str = f"UTC{tz_offset_str()}"
-
-    dealer_mode = settings.BOT_MODE == "dealer"
-    dealer_name = settings.DEALER_NAME
+    owner_chat = int(settings.OWNER_CHAT_ID) if settings.OWNER_CHAT_ID else None
 
     async with SessionLocal() as session:
-        q = select(Item).order_by(Item.due_date.asc())
-        if dealer_mode:
-            q = q.where(Item.dealer == dealer_name)
-        else:
-            q = q.where(Item.dealer == "main")
+        # Карта: код дилера -> chat_id
+        dealer_rows = (await session.execute(select(Dealer.code, Dealer.chat_id))).all()
+        dealer_chat = {code: chat_id for code, chat_id in dealer_rows}
 
-        items = (await session.execute(q)).scalars().all()
+        items = (await session.execute(select(Item).order_by(Item.due_date.asc()))).scalars().all()
 
         for it in items:
-            # Куда отправлять:
-            if dealer_mode:
-                target_chat = int(settings.OWNER_CHAT_ID) if settings.OWNER_CHAT_ID else None
+            # Кому отправлять уведомление по этой записи
+            if it.dealer and it.dealer in dealer_chat:
+                target_chat = dealer_chat[it.dealer]
             else:
-                target_chat = it.chat_id or (int(settings.OWNER_CHAT_ID) if settings.OWNER_CHAT_ID else None)
+                # 'main' или дилер без записи в таблице → администратору
+                target_chat = it.chat_id or owner_chat
             if not target_chat:
                 continue
 
@@ -82,7 +84,6 @@ async def check_expiries(bot: Bot) -> None:
                 except Exception:
                     pass
                 else:
-                    # Ставим сразу максимум, чтобы не было повторов в следующих циклах
                     it.notified_count = settings.MAX_NOTIFICATIONS
                     it.last_notified_at = now
 

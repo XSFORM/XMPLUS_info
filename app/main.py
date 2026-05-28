@@ -4,8 +4,8 @@ import logging
 from aiogram import Bot, Dispatcher
 
 from app.config import settings
-from app.bot import router, set_bot_commands
-from app.db import init_db
+from app.bot import router, dealer_router, guest_router, set_bot_commands
+from app.db import init_db, seed_default_dealers, seed_payment_methods
 from app.scheduler import start_scheduler
 
 
@@ -21,11 +21,18 @@ async def main() -> None:
     # Инициализируем БД
     await init_db()
 
+    # Первичное наполнение списка дилеров и методов оплаты (только admin-бот)
+    if settings.BOT_MODE != "dealer":
+        await seed_default_dealers()
+        await seed_payment_methods()
+
     # Регистрируем команды бота (кнопка «меню» в Telegram)
     await set_bot_commands(bot)
 
-    # Подключаем роутеры
+    # Подключаем роутеры (порядок: владелец, дилеры, гости-в-конце)
     dp.include_router(router)
+    dp.include_router(dealer_router)
+    dp.include_router(guest_router)
 
     # Запускаем планировщик задач (проверка истечений)
     start_scheduler(bot)

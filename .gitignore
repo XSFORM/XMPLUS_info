@@ -26,6 +26,10 @@ data/*.db
 data/*.sqlite3
 data/*.sqlite
 
+# Backup archives (keep folder, ignore ZIPs)
+backup/*.zip
+data/backups/
+
 # Logs
 logs/
 *.log
