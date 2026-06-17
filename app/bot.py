@@ -3171,7 +3171,7 @@ async def oful_confirm(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
 
     # 2) Добавляем долг дилеру
     new_bal = await apply_balance_change(
-        dealer_code, -price, "order", f"Ключ для {client_name} (USERID={uid})"
+        dealer_code, price, "order", f"Ключ для {client_name} (USERID={uid})"
     )
 
     # 3) Отправляем дилеру ключ
