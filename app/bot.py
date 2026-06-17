@@ -164,10 +164,11 @@ def main_menu_kb() -> ReplyKeyboardMarkup:
             [KeyboardButton(text="➕ Добавить"), KeyboardButton(text="🔄 Продлить")],
             [KeyboardButton(text="🗑 Удалить"), KeyboardButton(text="📋 Список")],
             [KeyboardButton(text="⏰ Ближайшие"), KeyboardButton(text="⛔ Отключённые")],
-            [KeyboardButton(text="👥 Дилеры"), KeyboardButton(text="💰 Баланс")],
-            [KeyboardButton(text="💳 Оплата"), KeyboardButton(text="🌐 Часовой пояс")],
-            [KeyboardButton(text="📊 Статус"), KeyboardButton(text="💾 Бэкап")],
-            [KeyboardButton(text="ℹ️ Помощь"), KeyboardButton(text="❌ Отмена"), KeyboardButton(text="👁 Скрыть")],
+            [KeyboardButton(text="✏️ Редактор"), KeyboardButton(text="👥 Дилеры")],
+            [KeyboardButton(text="💰 Баланс"), KeyboardButton(text="💳 Оплата")],
+            [KeyboardButton(text="🌐 Часовой пояс"), KeyboardButton(text="📊 Статус")],
+            [KeyboardButton(text="💾 Бэкап"), KeyboardButton(text="ℹ️ Помощь")],
+            [KeyboardButton(text="❌ Отмена"), KeyboardButton(text="👁 Скрыть")],
         ],
         resize_keyboard=True,
         input_field_placeholder="Выберите команду…",
@@ -853,7 +854,7 @@ FIELD_LABELS = {
 
 
 @router.message(Command("edit"))
-@router.message(F.text.in_(["/edit"]))
+@router.message(F.text.in_(["/edit", "✏️ Редактор"]))
 async def edit_start(message: Message, state: FSMContext) -> None:
     if not ensure_allowed_user(message):
         return
@@ -879,7 +880,11 @@ async def edit_search(message: Message, state: FSMContext) -> None:
         if text.isdigit():
             q = select(Item).where(Item.user_id == int(text))
         else:
-            q = select(Item).where(Item.note.ilike(f"%{text}%"))
+            from sqlalchemy import or_
+            q = select(Item).where(or_(
+                Item.username.ilike(f"%{text}%"),
+                Item.note.ilike(f"%{text}%"),
+            ))
         items = (await session.execute(q)).scalars().all()
     if not items:
         await message.answer("\u041d\u0438\u0447\u0435\u0433\u043e \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u043e. \u041f\u043e\u043f\u0440\u043e\u0431\u0443\u0439\u0442\u0435 \u0435\u0449\u0451 \u0440\u0430\u0437 \u0438\u043b\u0438 /cancel.")
@@ -1625,8 +1630,9 @@ def dealer_user_menu_kb() -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text="➕ Добавить"), KeyboardButton(text="🔄 Продлить")],
             [KeyboardButton(text="📋 Список"), KeyboardButton(text="⛔ Отключённые")],
-            [KeyboardButton(text="⏰ Ближайшие"), KeyboardButton(text="📊 Статус")],
+            [KeyboardButton(text="⏰ Ближайшие"), KeyboardButton(text="✏️ Редактор")],
             [KeyboardButton(text="💰 Баланс"), KeyboardButton(text="💳 Оплата")],
+            [KeyboardButton(text="📊 Статус")],
         ],
         resize_keyboard=True,
         input_field_placeholder="Выберите команду…",
@@ -1743,7 +1749,7 @@ class DealerEditStates(StatesGroup):
 
 
 @dealer_router.message(Command("edit"))
-@dealer_router.message(F.text.in_(["/edit"]))
+@dealer_router.message(F.text.in_(["/edit", "✏️ Редактор"]))
 async def dealer_edit_start(message: Message, state: FSMContext) -> None:
     d = await dealer_by_chat(message.from_user.id)
     if not d:
@@ -1769,7 +1775,11 @@ async def dealer_edit_search(message: Message, state: FSMContext) -> None:
         if text.isdigit():
             q = select(Item).where(Item.user_id == int(text), Item.dealer == d.code)
         else:
-            q = select(Item).where(Item.note.ilike(f"%{text}%"), Item.dealer == d.code)
+            from sqlalchemy import or_
+            q = select(Item).where(
+                Item.dealer == d.code,
+                or_(Item.username.ilike(f"%{text}%"), Item.note.ilike(f"%{text}%")),
+            )
         items = (await session.execute(q)).scalars().all()
     if not items:
         await message.answer("Ничего не найдено. Попробуйте ещё раз или /cancel.")
