@@ -3035,7 +3035,7 @@ class OrderFulfillStates(StatesGroup):
     waiting_confirm = State()
 
 
-@router.callback_query(F.data.startswith("oful:"))
+@router.callback_query(F.data.startswith("oful:") & ~F.data.in_(["oful:ok", "oful:cancel"]))
 async def order_fulfill_start(cb: CallbackQuery, state: FSMContext) -> None:
     await cb.answer()
     oid = cb.data.split(":", 1)[1]
