@@ -45,6 +45,15 @@ from app.utils import (
 
 router = Router()
 
+# Хранилище заказов дилеров (order_id → dict с данными)
+_pending_orders: dict[str, dict] = {}
+_order_counter = 0
+
+def _next_order_id() -> str:
+    global _order_counter
+    _order_counter += 1
+    return str(_order_counter)
+
 # Команды меню в зависимости от режима
 BOT_COMMANDS_ADMIN = [
     BotCommand(command="start", description="Запуск бота"),
@@ -200,9 +209,9 @@ def split_text_chunks(header: str, lines: list[str]) -> list[str]:
 async def build_items_csv_bytes(items) -> bytes:
     buf = io.StringIO()
     w = csv.writer(buf)
-    w.writerow(["user_id", "username", "due_date"])
+    w.writerow(["user_id", "username", "note", "due_date"])
     for it in items:
-        w.writerow([it.user_id, it.username, fmt_dt_human(it.due_date)])
+        w.writerow([it.user_id, it.username, getattr(it, "note", "") or "", fmt_dt_human(it.due_date)])
     data = buf.getvalue().encode("utf-8")
     buf.close()
     return data
@@ -214,14 +223,24 @@ UNAME_W = 8
 def _trunc(s: str, width: int) -> str:
     return s if len(s) <= width else (s[: max(0, width - 1)] + "…")
 
+NOTE_W = 10
+
 def make_table_lines_without_id(items) -> tuple[str, list[str]]:
-    header = f"{'USERID'.rjust(UID_W)} | {'USERNAME'.ljust(UNAME_W)} | DUE DATE"
+    has_notes = any(getattr(it, "note", None) for it in items)
+    if has_notes:
+        header = f"{'USERID'.rjust(UID_W)} | {'USERNAME'.ljust(UNAME_W)} | {'КЛИЕНТ'.ljust(NOTE_W)} | DUE DATE"
+    else:
+        header = f"{'USERID'.rjust(UID_W)} | {'USERNAME'.ljust(UNAME_W)} | DUE DATE"
     rows: list[str] = []
     for it in items:
         uid = str(it.user_id).rjust(UID_W)
         uname = _trunc(it.username, UNAME_W).ljust(UNAME_W)
         due = fmt_dt_human(it.due_date)
-        rows.append(f"{uid} | {uname} | {due}")
+        if has_notes:
+            note = _trunc(getattr(it, "note", "") or "", NOTE_W).ljust(NOTE_W)
+            rows.append(f"{uid} | {uname} | {note} | {due}")
+        else:
+            rows.append(f"{uid} | {uname} | {due}")
     return header, rows
 
 def send_pre_chunk(message: Message, text: str):
@@ -363,6 +382,7 @@ class AddStates(StatesGroup):
     waiting_user_id = State()
     waiting_username = State()
     waiting_duedatetime = State()
+    waiting_note = State()
 
 @router.message(Command("cancel"))
 @router.message(F.text.in_(["/cancel", "❌ Отмена"]))
@@ -385,7 +405,7 @@ async def add_start(message: Message, state: FSMContext) -> None:
         return
     await state.clear()
     await state.set_state(AddStates.waiting_user_id)
-    await message.answer("Шаг 1/3. Введите USER ID (число):", reply_markup=main_menu_kb())
+    await message.answer("Шаг 1/4. Введите USER ID (число):", reply_markup=main_menu_kb())
 
 @router.message(AddStates.waiting_user_id)
 async def add_user_id(message: Message, state: FSMContext) -> None:
@@ -395,7 +415,7 @@ async def add_user_id(message: Message, state: FSMContext) -> None:
         return
     await state.update_data(user_id=int(text))
     await state.set_state(AddStates.waiting_username)
-    await message.answer("Шаг 2/3. Введите USERNAME (например, XmADMIN):", reply_markup=main_menu_kb())
+    await message.answer("Шаг 2/4. Введите USERNAME (например, XmADMIN):", reply_markup=main_menu_kb())
 
 @router.message(AddStates.waiting_username)
 async def add_username(message: Message, state: FSMContext) -> None:
@@ -406,7 +426,7 @@ async def add_username(message: Message, state: FSMContext) -> None:
     await state.update_data(username=username)
     await state.set_state(AddStates.waiting_duedatetime)
     await message.answer(
-        "Шаг 3/3. Введите дату и время отключения строго в формате:\n"
+        "Шаг 3/4. Введите дату и время отключения строго в формате:\n"
         "YYYY-MM-DD HH:MM:SS\n"
         "Пример: 2025-10-20 15:35:43",
         reply_markup=main_menu_kb(),
@@ -423,17 +443,39 @@ async def add_duedatetime(message: Message, state: FSMContext) -> None:
             reply_markup=main_menu_kb(),
         )
         return
+    await state.update_data(due_date=dt.isoformat())
+    await state.set_state(AddStates.waiting_note)
+    await message.answer(
+        "Шаг 4/4. Введите заметку (имя клиента) или нажмите «Пропустить»:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⏭ Пропустить", callback_data="add:skip_note")],
+        ]),
+    )
+
+@router.callback_query(F.data == "add:skip_note")
+async def add_skip_note(cb: CallbackQuery, state: FSMContext) -> None:
+    await cb.answer()
+    await _save_new_item(cb.message, state, note="")
+
+@router.message(AddStates.waiting_note)
+async def add_note(message: Message, state: FSMContext) -> None:
+    note = (message.text or "").strip()
+    await _save_new_item(message, state, note=note)
+
+async def _save_new_item(message: Message, state: FSMContext, note: str) -> None:
     data = await state.get_data()
     user_id = data["user_id"]
     username = data["username"]
+    dt = datetime.fromisoformat(data["due_date"])
     async with SessionLocal() as session:
-        item = Item(user_id=user_id, username=username, due_date=dt, chat_id=message.chat.id)
+        item = Item(user_id=user_id, username=username, due_date=dt, note=note, chat_id=message.chat.id)
         session.add(item)
         await session.commit()
         await session.refresh(item)
     await state.clear()
+    note_str = f", Заметка: {note}" if note else ""
     await message.answer(
-        f"Добавлено: [{item.id}] USERID={user_id}, USERNAME={username}, DUE={fmt_dt_human(dt)}",
+        f"Добавлено: [{item.id}] USERID={user_id}, USERNAME={username}, DUE={fmt_dt_human(dt)}{note_str}",
         reply_markup=main_menu_kb(),
     )
 
@@ -1515,6 +1557,9 @@ async def dealer_on_status(message: Message) -> None:
 
 # ===== Заказ новых ключей (дилер) =====
 
+class DealerOrderStates(StatesGroup):
+    waiting_names = State()
+
 @dealer_router.message(Command("order"))
 @dealer_router.message(F.text.in_(["/order", "➕ Добавить"]))
 async def dealer_order_start(message: Message) -> None:
@@ -1533,7 +1578,7 @@ async def dealer_order_start(message: Message) -> None:
 
 
 @dealer_router.callback_query(F.data.startswith("dorder:n:"))
-async def dealer_order_pick(cb: CallbackQuery) -> None:
+async def dealer_order_pick(cb: CallbackQuery, state: FSMContext) -> None:
     await cb.answer()
     try:
         n = int(cb.data.split(":")[-1])
@@ -1541,52 +1586,70 @@ async def dealer_order_pick(cb: CallbackQuery) -> None:
         return
     if n < 1 or n > 3:
         return
-    kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="✅ Да", callback_data=f"dorder:yes:{n}"),
-        InlineKeyboardButton(text="❌ Нет", callback_data="dorder:no"),
-    ]])
+    await state.update_data(order_count=n, order_names=[], order_collected=0)
+    await state.set_state(DealerOrderStates.waiting_names)
     await cb.message.answer(
-        f"Вы уверены, что хотите заказать {n} новых ключей?",
-        reply_markup=kb,
+        f"Введите имя клиента 1/{n}:",
     )
 
 
-@dealer_router.callback_query(F.data.startswith("dorder:yes:"))
-async def dealer_order_confirm(cb: CallbackQuery, bot: Bot) -> None:
-    await cb.answer()
-    try:
-        n = int(cb.data.split(":")[-1])
-    except Exception:
+@dealer_router.message(DealerOrderStates.waiting_names)
+async def dealer_order_collect_name(message: Message, state: FSMContext, bot: Bot) -> None:
+    name = (message.text or "").strip()
+    if not name:
+        await message.answer("Имя не может быть пустым. Введите ещё раз:")
         return
-    if n < 1 or n > 3:
+    data = await state.get_data()
+    names = data.get("order_names", [])
+    names.append(name)
+    collected = len(names)
+    total = data["order_count"]
+
+    if collected < total:
+        await state.update_data(order_names=names)
+        await message.answer(f"Введите имя клиента {collected + 1}/{total}:")
         return
-    d = await dealer_by_chat(cb.from_user.id)
+
+    # Все имена собраны — отправляем заявку админу
+    await state.clear()
+    d = await dealer_by_chat(message.from_user.id)
     if not d:
         return
+    names_list = "\n".join(f"  {i+1}) {n}" for i, n in enumerate(names))
     owner_chat = int(settings.OWNER_CHAT_ID) if settings.OWNER_CHAT_ID else None
     if owner_chat:
+        oid = _next_order_id()
+        _pending_orders[oid] = {
+            "dealer_code": d.code,
+            "dealer_title": d.title,
+            "dealer_chat_id": d.chat_id,
+            "names": list(names),
+            "fulfilled": 0,
+        }
         admin_text = (
-            "📦 Заявка на новые ключи\n\n"
+            f"📦 Заявка на новые ключи\n\n"
             f"Дилер: {d.title}\n"
-            f"Количество: {n}\n\n"
-            "Дальнейшие шаги:\n"
-            "1) ➕ Добавить — заведите ключ(и).\n"
-            "2) 👥 Дилеры → 📝 Назначить по списку USERID — назначьте их этому дилеру.\n"
-            "3) ✉️ Написать дилеру — отправьте коды дилеру."
+            f"Количество: {total}\n"
+            f"Клиенты:\n{names_list}\n"
         )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="▶️ Выполнить", callback_data=f"oful:{oid}")],
+        ])
         try:
-            await bot.send_message(owner_chat, admin_text)
+            await bot.send_message(owner_chat, admin_text, reply_markup=kb)
         except Exception:
             pass
-    await cb.message.answer(
-        f"✅ Запрос на {n} новых ключей отправлен администратору. Ожидайте.",
+    await message.answer(
+        f"✅ Запрос на {total} ключей отправлен администратору.\n"
+        f"Клиенты:\n{names_list}\n\nОжидайте.",
         reply_markup=dealer_user_menu_kb(),
     )
 
 
 @dealer_router.callback_query(F.data == "dorder:no")
-async def dealer_order_cancel(cb: CallbackQuery) -> None:
+async def dealer_order_cancel(cb: CallbackQuery, state: FSMContext) -> None:
     await cb.answer()
+    await state.clear()
     await cb.message.answer("Отменено.", reply_markup=dealer_user_menu_kb())
 
 
@@ -2960,6 +3023,205 @@ async def dealer_key_send(message: Message, state: FSMContext, bot: Bot) -> None
         f"✅ Ключ отправлен дилеру «{d.title}» (USERID {uid}, USERNAME {uname}).",
         reply_markup=main_menu_kb(),
     )
+
+
+# ====== Выполнение заказа дилера (админ) ======
+
+class OrderFulfillStates(StatesGroup):
+    waiting_user_id = State()
+    waiting_username = State()
+    waiting_due = State()
+    waiting_key_code = State()
+    waiting_confirm = State()
+
+
+@router.callback_query(F.data.startswith("oful:"))
+async def order_fulfill_start(cb: CallbackQuery, state: FSMContext) -> None:
+    await cb.answer()
+    oid = cb.data.split(":", 1)[1]
+    order = _pending_orders.get(oid)
+    if not order:
+        await cb.message.answer("Заказ не найден или уже выполнен.", reply_markup=main_menu_kb())
+        return
+    idx = order["fulfilled"]
+    names = order["names"]
+    if idx >= len(names):
+        await cb.message.answer("Все ключи из этого заказа уже выполнены.", reply_markup=main_menu_kb())
+        return
+    client_name = names[idx]
+    total = len(names)
+    await state.clear()
+    await state.update_data(order_id=oid, key_index=idx)
+    await state.set_state(OrderFulfillStates.waiting_user_id)
+    await cb.message.answer(
+        f"🔑 Ключ {idx + 1}/{total} — клиент: {client_name}\n\n"
+        f"Введите USERID:",
+        reply_markup=main_menu_kb(),
+    )
+
+
+@router.message(OrderFulfillStates.waiting_user_id)
+async def oful_user_id(message: Message, state: FSMContext) -> None:
+    text = (message.text or "").strip()
+    if not text.isdigit():
+        await message.answer("USERID должен быть числом. Попробуйте ещё раз или /cancel.")
+        return
+    await state.update_data(uid=int(text))
+    await state.set_state(OrderFulfillStates.waiting_username)
+    await message.answer("Введите USERNAME:")
+
+
+@router.message(OrderFulfillStates.waiting_username)
+async def oful_username(message: Message, state: FSMContext) -> None:
+    uname = (message.text or "").strip()
+    if not uname:
+        await message.answer("USERNAME не может быть пустым. Попробуйте ещё раз:")
+        return
+    await state.update_data(uname=uname)
+    await state.set_state(OrderFulfillStates.waiting_due)
+    await message.answer(
+        "Введите дату отключения (YYYY-MM-DD HH:MM:SS):\n"
+        "Пример: 2025-10-20 15:35:43",
+    )
+
+
+@router.message(OrderFulfillStates.waiting_due)
+async def oful_due(message: Message, state: FSMContext) -> None:
+    text = (message.text or "").strip()
+    dt = parse_datetime_human(text)
+    if not dt:
+        await message.answer("Неверный формат. Используйте YYYY-MM-DD HH:MM:SS. Ещё раз:")
+        return
+    await state.update_data(due=dt.isoformat())
+    await state.set_state(OrderFulfillStates.waiting_key_code)
+    await message.answer("Введите код ключа (текст для отправки дилеру):")
+
+
+@router.message(OrderFulfillStates.waiting_key_code)
+async def oful_key_code(message: Message, state: FSMContext) -> None:
+    key_code = (message.text or "").strip()
+    if not key_code:
+        await message.answer("Код ключа не может быть пустым. Ещё раз:")
+        return
+    await state.update_data(key_code=key_code)
+    data = await state.get_data()
+    oid = data["order_id"]
+    order = _pending_orders.get(oid)
+    if not order:
+        await state.clear()
+        await message.answer("Заказ не найден.", reply_markup=main_menu_kb())
+        return
+    idx = data["key_index"]
+    client_name = order["names"][idx]
+    dt = datetime.fromisoformat(data["due"])
+    price = await get_price()
+    await state.set_state(OrderFulfillStates.waiting_confirm)
+    await message.answer(
+        f"📋 Подтверждение:\n\n"
+        f"Дилер: {order['dealer_title']}\n"
+        f"Клиент: {client_name}\n"
+        f"USERID: {data['uid']}\n"
+        f"USERNAME: {data['uname']}\n"
+        f"DUE: {fmt_dt_human(dt)}\n"
+        f"Код ключа: <code>{html.escape(data['key_code'])}</code>\n"
+        f"Долг: +${price:.2f}\n",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Подтвердить", callback_data="oful:ok"),
+                InlineKeyboardButton(text="❌ Отмена", callback_data="oful:cancel"),
+            ],
+        ]),
+    )
+
+
+@router.callback_query(F.data == "oful:ok", OrderFulfillStates.waiting_confirm)
+async def oful_confirm(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    await cb.answer()
+    data = await state.get_data()
+    oid = data["order_id"]
+    order = _pending_orders.get(oid)
+    if not order:
+        await state.clear()
+        await cb.message.answer("Заказ не найден.", reply_markup=main_menu_kb())
+        return
+
+    idx = data["key_index"]
+    client_name = order["names"][idx]
+    uid = data["uid"]
+    uname = data["uname"]
+    dt = datetime.fromisoformat(data["due"])
+    key_code = data["key_code"]
+    dealer_code = order["dealer_code"]
+    dealer_chat_id = order["dealer_chat_id"]
+    price = await get_price()
+
+    # 1) Добавляем клиента в базу (на имя дилера, с заметкой)
+    async with SessionLocal() as session:
+        item = Item(
+            user_id=uid,
+            username=uname,
+            due_date=dt,
+            dealer=dealer_code,
+            note=client_name,
+            chat_id=cb.message.chat.id,
+        )
+        session.add(item)
+        await session.commit()
+
+    # 2) Добавляем долг дилеру
+    new_bal = await apply_balance_change(
+        dealer_code, -price, "order", f"Ключ для {client_name} (USERID={uid})"
+    )
+
+    # 3) Отправляем дилеру ключ
+    if dealer_chat_id:
+        dealer_text = (
+            f"🔑 Ваш ключ готов!\n\n"
+            f"Клиент: {client_name}\n"
+            f"USERID: {uid}\n"
+            f"USERNAME: {uname}\n"
+            f"Действует до: {fmt_dt_human(dt)}\n\n"
+            f"Код ключа (нажмите чтобы скопировать):\n"
+            f"<code>{html.escape(key_code)}</code>"
+        )
+        try:
+            await bot.send_message(dealer_chat_id, dealer_text, parse_mode="HTML")
+        except Exception:
+            await cb.message.answer(f"⚠️ Не удалось отправить ключ дилеру (chat_id={dealer_chat_id}).")
+
+    # 4) Обновляем счётчик
+    order["fulfilled"] = idx + 1
+    await state.clear()
+
+    bal_str = f"${new_bal:.2f}" if new_bal is not None else "?"
+    await cb.message.answer(
+        f"✅ Ключ {idx + 1}/{len(order['names'])} выполнен!\n"
+        f"Клиент: {client_name}, USERID={uid}\n"
+        f"Баланс дилера: {bal_str}",
+        reply_markup=main_menu_kb(),
+    )
+
+    # Если есть ещё ключи — предлагаем продолжить
+    if order["fulfilled"] < len(order["names"]):
+        next_name = order["names"][order["fulfilled"]]
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f"▶️ Следующий: {next_name}", callback_data=f"oful:{oid}")],
+        ])
+        await cb.message.answer(
+            f"Осталось ключей: {len(order['names']) - order['fulfilled']}",
+            reply_markup=kb,
+        )
+    else:
+        del _pending_orders[oid]
+        await cb.message.answer("🎉 Все ключи из заказа выполнены!", reply_markup=main_menu_kb())
+
+
+@router.callback_query(F.data == "oful:cancel", OrderFulfillStates.waiting_confirm)
+async def oful_cancel(cb: CallbackQuery, state: FSMContext) -> None:
+    await cb.answer()
+    await state.clear()
+    await cb.message.answer("Отменено. Заказ остаётся в очереди.", reply_markup=main_menu_kb())
 
 
 # ====== Бэкап базы данных (только админ) ======

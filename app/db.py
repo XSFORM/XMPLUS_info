@@ -40,6 +40,8 @@ class Item(Base):
 
     dealer: Mapped[str] = mapped_column(String(64), nullable=False, default="main")
 
+    note: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, default="")
+
     chat_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     notify_every_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     max_notifications: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
@@ -133,6 +135,13 @@ def _migrate_schema(conn) -> None:
         if rows and "balance" not in cols:
             conn.exec_driver_sql(
                 "ALTER TABLE dealers ADD COLUMN balance REAL NOT NULL DEFAULT 0"
+            )
+        # items.note
+        rows = conn.exec_driver_sql("PRAGMA table_info(items)").fetchall()
+        cols = {r[1] for r in rows}
+        if rows and "note" not in cols:
+            conn.exec_driver_sql(
+                "ALTER TABLE items ADD COLUMN note TEXT DEFAULT ''"
             )
         # payments.variant
         rows = conn.exec_driver_sql("PRAGMA table_info(payments)").fetchall()
