@@ -3176,6 +3176,7 @@ async def oful_confirm(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
 
     # 3) Отправляем дилеру ключ
     if dealer_chat_id:
+        bal_abs = f"${abs(new_bal):.2f}" if new_bal is not None else "?"
         dealer_text = (
             f"🔑 Ваш ключ готов!\n\n"
             f"Клиент: {client_name}\n"
@@ -3183,7 +3184,9 @@ async def oful_confirm(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
             f"USERNAME: {uname}\n"
             f"Действует до: {fmt_dt_human(dt)}\n\n"
             f"Код ключа (нажмите чтобы скопировать):\n"
-            f"<code>{html.escape(key_code)}</code>"
+            f"<code>{html.escape(key_code)}</code>\n\n"
+            f"Начислено: ${price:.2f}\n"
+            f"Ваш долг: {bal_abs}"
         )
         try:
             await bot.send_message(dealer_chat_id, dealer_text, parse_mode="HTML")
