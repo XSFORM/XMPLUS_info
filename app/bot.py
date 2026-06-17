@@ -67,6 +67,7 @@ BOT_COMMANDS_ADMIN = [
     BotCommand(command="dealers", description="Раздел диллеры"),
     BotCommand(command="balance", description="Балансы и долги дилеров"),
     BotCommand(command="pay", description="Методы оплаты"),
+    BotCommand(command="edit", description="Редактировать ключ"),
     BotCommand(command="status", description="Статус бота"),
     BotCommand(command="backup", description="Бэкап базы данных"),
     BotCommand(command="timezone", description="Показать/сменить локальное время (TZ)"),
@@ -82,6 +83,7 @@ BOT_COMMANDS_DEALER = [
     BotCommand(command="next", description="Ближайшие 3 дня (только ваши)"),
     BotCommand(command="renew", description="Запрос на продление клиента"),
     BotCommand(command="order", description="Заказать новые ключи"),
+    BotCommand(command="edit", description="Изменить имя клиента"),
     BotCommand(command="balance", description="Ваш баланс (долг)"),
     BotCommand(command="pay", description="Оплата и реквизиты"),
     BotCommand(command="status", description="Статус"),
@@ -806,6 +808,182 @@ async def list_export_csv(cb: CallbackQuery) -> None:
         BufferedInputFile(data, filename="clients_export.csv"),
         caption=f"Экспорт: {len(items)} записей"
     )
+
+
+# ==== Редактирование ключей (админ) ====
+
+class EditStates(StatesGroup):
+    waiting_search = State()
+    waiting_pick = State()
+    waiting_value = State()
+
+
+def _item_card(it) -> str:
+    note = getattr(it, "note", "") or ""
+    note_line = f"Клиент: {note}\n" if note else ""
+    return (
+        f"USERID: {it.user_id}\n"
+        f"USERNAME: {it.username}\n"
+        f"{note_line}"
+        f"DUE: {fmt_dt_human(it.due_date)}\n"
+        f"Дилер: {it.dealer}"
+    )
+
+
+def _edit_kb(item_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="\u270f\ufe0f USERID", callback_data=f"edit:f:{item_id}:user_id"),
+            InlineKeyboardButton(text="\u270f\ufe0f USERNAME", callback_data=f"edit:f:{item_id}:username"),
+        ],
+        [
+            InlineKeyboardButton(text="\u270f\ufe0f \u041a\u043b\u0438\u0435\u043d\u0442", callback_data=f"edit:f:{item_id}:note"),
+            InlineKeyboardButton(text="\u270f\ufe0f \u0414\u0430\u0442\u0430", callback_data=f"edit:f:{item_id}:due_date"),
+        ],
+        [InlineKeyboardButton(text="\u25c0 \u041d\u0430\u0437\u0430\u0434", callback_data="edit:back")],
+    ])
+
+
+FIELD_LABELS = {
+    "user_id": "USERID",
+    "username": "USERNAME",
+    "note": "\u0417\u0430\u043c\u0435\u0442\u043a\u0430 (\u0438\u043c\u044f \u043a\u043b\u0438\u0435\u043d\u0442\u0430)",
+    "due_date": "\u0414\u0430\u0442\u0430 \u043e\u0442\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u044f",
+}
+
+
+@router.message(Command("edit"))
+@router.message(F.text.in_(["/edit"]))
+async def edit_start(message: Message, state: FSMContext) -> None:
+    if not ensure_allowed_user(message):
+        return
+    if is_dealer_mode():
+        await message.answer(ensure_admin_only(), reply_markup=main_menu_kb())
+        return
+    await state.clear()
+    await state.set_state(EditStates.waiting_search)
+    await message.answer(
+        "\u270f\ufe0f \u0420\u0435\u0434\u0430\u043a\u0442\u043e\u0440 \u043a\u043b\u044e\u0447\u0435\u0439\n\n"
+        "\u0412\u0432\u0435\u0434\u0438\u0442\u0435 USERID \u0438\u043b\u0438 \u0438\u043c\u044f \u043a\u043b\u0438\u0435\u043d\u0442\u0430 \u0434\u043b\u044f \u043f\u043e\u0438\u0441\u043a\u0430:",
+        reply_markup=main_menu_kb(),
+    )
+
+
+@router.message(EditStates.waiting_search)
+async def edit_search(message: Message, state: FSMContext) -> None:
+    text = (message.text or "").strip()
+    if not text:
+        await message.answer("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 USERID \u0438\u043b\u0438 \u0438\u043c\u044f \u043a\u043b\u0438\u0435\u043d\u0442\u0430:")
+        return
+    async with SessionLocal() as session:
+        if text.isdigit():
+            q = select(Item).where(Item.user_id == int(text))
+        else:
+            q = select(Item).where(Item.note.ilike(f"%{text}%"))
+        items = (await session.execute(q)).scalars().all()
+    if not items:
+        await message.answer("\u041d\u0438\u0447\u0435\u0433\u043e \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u043e. \u041f\u043e\u043f\u0440\u043e\u0431\u0443\u0439\u0442\u0435 \u0435\u0449\u0451 \u0440\u0430\u0437 \u0438\u043b\u0438 /cancel.")
+        return
+    if len(items) == 1:
+        it = items[0]
+        await state.clear()
+        await message.answer(
+            f"\U0001f4cb {_item_card(it)}",
+            reply_markup=_edit_kb(it.id),
+        )
+        return
+    # Multiple results - show list with buttons
+    rows = []
+    for it in items[:10]:
+        note = getattr(it, "note", "") or ""
+        label = f"{it.user_id} | {it.username}"
+        if note:
+            label += f" | {note}"
+        rows.append([InlineKeyboardButton(text=label, callback_data=f"edit:pick:{it.id}")])
+    kb = InlineKeyboardMarkup(inline_keyboard=rows)
+    await state.clear()
+    await message.answer(f"\u041d\u0430\u0439\u0434\u0435\u043d\u043e {len(items)} \u0437\u0430\u043f\u0438\u0441\u0435\u0439. \u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435:", reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("edit:pick:"))
+async def edit_pick(cb: CallbackQuery) -> None:
+    await cb.answer()
+    item_id = int(cb.data.split(":")[-1])
+    async with SessionLocal() as session:
+        it = (await session.execute(select(Item).where(Item.id == item_id))).scalars().first()
+    if not it:
+        await cb.message.answer("\u0417\u0430\u043f\u0438\u0441\u044c \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u0430.", reply_markup=main_menu_kb())
+        return
+    await cb.message.answer(
+        f"\U0001f4cb {_item_card(it)}",
+        reply_markup=_edit_kb(it.id),
+    )
+
+
+@router.callback_query(F.data.startswith("edit:f:"))
+async def edit_field_start(cb: CallbackQuery, state: FSMContext) -> None:
+    await cb.answer()
+    parts = cb.data.split(":")
+    item_id = int(parts[2])
+    field = parts[3]
+    label = FIELD_LABELS.get(field, field)
+    await state.set_state(EditStates.waiting_value)
+    await state.update_data(edit_item_id=item_id, edit_field=field)
+    if field == "due_date":
+        await cb.message.answer(
+            f"\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043d\u043e\u0432\u0443\u044e \u0434\u0430\u0442\u0443 (YYYY-MM-DD HH:MM:SS):"
+        )
+    elif field == "user_id":
+        await cb.message.answer(f"\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043d\u043e\u0432\u044b\u0439 USERID (\u0447\u0438\u0441\u043b\u043e):")
+    else:
+        await cb.message.answer(f"\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043d\u043e\u0432\u043e\u0435 \u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435 \u0434\u043b\u044f {label}:")
+
+
+@router.message(EditStates.waiting_value)
+async def edit_field_save(message: Message, state: FSMContext) -> None:
+    text = (message.text or "").strip()
+    if not text:
+        await message.answer("\u0417\u043d\u0430\u0447\u0435\u043d\u0438\u0435 \u043d\u0435 \u043c\u043e\u0436\u0435\u0442 \u0431\u044b\u0442\u044c \u043f\u0443\u0441\u0442\u044b\u043c.")
+        return
+    data = await state.get_data()
+    item_id = data["edit_item_id"]
+    field = data["edit_field"]
+    async with SessionLocal() as session:
+        it = (await session.execute(select(Item).where(Item.id == item_id))).scalars().first()
+        if not it:
+            await state.clear()
+            await message.answer("\u0417\u0430\u043f\u0438\u0441\u044c \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u0430.", reply_markup=main_menu_kb())
+            return
+        if field == "user_id":
+            if not text.isdigit():
+                await message.answer("USERID \u0434\u043e\u043b\u0436\u0435\u043d \u0431\u044b\u0442\u044c \u0447\u0438\u0441\u043b\u043e\u043c. \u0415\u0449\u0451 \u0440\u0430\u0437:")
+                return
+            it.user_id = int(text)
+        elif field == "username":
+            it.username = text
+        elif field == "note":
+            it.note = text
+        elif field == "due_date":
+            dt = parse_datetime_human(text)
+            if not dt:
+                await message.answer("\u041d\u0435\u0432\u0435\u0440\u043d\u044b\u0439 \u0444\u043e\u0440\u043c\u0430\u0442. YYYY-MM-DD HH:MM:SS. \u0415\u0449\u0451 \u0440\u0430\u0437:")
+                return
+            it.due_date = dt
+        await session.commit()
+        await session.refresh(it)
+    await state.clear()
+    await message.answer(
+        f"\u2705 \u0421\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u043e!\n\n\U0001f4cb {_item_card(it)}",
+        reply_markup=_edit_kb(it.id),
+    )
+
+
+@router.callback_query(F.data == "edit:back")
+async def edit_back(cb: CallbackQuery, state: FSMContext) -> None:
+    await cb.answer()
+    await state.clear()
+    await cb.message.answer("\u0413\u043e\u0442\u043e\u0432\u043e.", reply_markup=main_menu_kb())
+
 
 # ==== Списки ====
 
@@ -1551,6 +1729,120 @@ async def dealer_on_status(message: Message) -> None:
         cnt = len((await session.execute(select(Item.id).where(Item.dealer == d.code))).all())
     await message.answer(
         f"Бот работает ✅\nДилер: {d.title}\nВаших записей: {cnt}",
+        reply_markup=dealer_user_menu_kb(),
+    )
+
+
+
+
+# ===== Редактирование имени клиента (дилер) =====
+
+class DealerEditStates(StatesGroup):
+    waiting_search = State()
+    waiting_value = State()
+
+
+@dealer_router.message(Command("edit"))
+@dealer_router.message(F.text.in_(["/edit"]))
+async def dealer_edit_start(message: Message, state: FSMContext) -> None:
+    d = await dealer_by_chat(message.from_user.id)
+    if not d:
+        return
+    await state.clear()
+    await state.set_state(DealerEditStates.waiting_search)
+    await message.answer(
+        "✏️ Редактор\n\nВведите USERID для поиска:",
+        reply_markup=dealer_user_menu_kb(),
+    )
+
+
+@dealer_router.message(DealerEditStates.waiting_search)
+async def dealer_edit_search(message: Message, state: FSMContext) -> None:
+    text = (message.text or "").strip()
+    d = await dealer_by_chat(message.from_user.id)
+    if not d:
+        return
+    if not text:
+        await message.answer("Введите USERID:")
+        return
+    async with SessionLocal() as session:
+        if text.isdigit():
+            q = select(Item).where(Item.user_id == int(text), Item.dealer == d.code)
+        else:
+            q = select(Item).where(Item.note.ilike(f"%{text}%"), Item.dealer == d.code)
+        items = (await session.execute(q)).scalars().all()
+    if not items:
+        await message.answer("Ничего не найдено. Попробуйте ещё раз или /cancel.")
+        return
+    if len(items) == 1:
+        it = items[0]
+        note = getattr(it, "note", "") or ""
+        dash = "—"
+        await state.update_data(dedit_item_id=it.id)
+        await state.set_state(DealerEditStates.waiting_value)
+        await message.answer(
+            f"USERID: {it.user_id}\nUSERNAME: {it.username}\n"
+            f"Клиент: {note or dash}\n\n"
+            "Введите новое имя клиента:",
+        )
+        return
+    rows = []
+    for it in items[:10]:
+        note = getattr(it, "note", "") or ""
+        label = f"{it.user_id} | {it.username}"
+        if note:
+            label += f" | {note}"
+        rows.append([InlineKeyboardButton(text=label, callback_data=f"dedit:pick:{it.id}")])
+    kb = InlineKeyboardMarkup(inline_keyboard=rows)
+    await state.clear()
+    await message.answer(f"Найдено {len(items)}. Выберите:", reply_markup=kb)
+
+
+@dealer_router.callback_query(F.data.startswith("dedit:pick:"))
+async def dealer_edit_pick(cb: CallbackQuery, state: FSMContext) -> None:
+    await cb.answer()
+    item_id = int(cb.data.split(":")[-1])
+    d = await dealer_by_chat(cb.from_user.id)
+    if not d:
+        return
+    async with SessionLocal() as session:
+        it = (await session.execute(select(Item).where(Item.id == item_id, Item.dealer == d.code))).scalars().first()
+    if not it:
+        await cb.message.answer("Запись не найдена.", reply_markup=dealer_user_menu_kb())
+        return
+    note = getattr(it, "note", "") or ""
+    dash = "—"
+    await state.set_state(DealerEditStates.waiting_value)
+    await state.update_data(dedit_item_id=it.id)
+    await cb.message.answer(
+        f"USERID: {it.user_id}\nUSERNAME: {it.username}\n"
+        f"Клиент: {note or dash}\n\n"
+        "Введите новое имя клиента:",
+    )
+
+
+@dealer_router.message(DealerEditStates.waiting_value)
+async def dealer_edit_save(message: Message, state: FSMContext) -> None:
+    text = (message.text or "").strip()
+    if not text:
+        await message.answer("Имя не может быть пустым.")
+        return
+    data = await state.get_data()
+    item_id = data["dedit_item_id"]
+    d = await dealer_by_chat(message.from_user.id)
+    if not d:
+        return
+    async with SessionLocal() as session:
+        it = (await session.execute(select(Item).where(Item.id == item_id, Item.dealer == d.code))).scalars().first()
+        if not it:
+            await state.clear()
+            await message.answer("Запись не найдена.", reply_markup=dealer_user_menu_kb())
+            return
+        it.note = text
+        await session.commit()
+    await state.clear()
+    await message.answer(
+        f"✅ Имя клиента обновлено: {text}",
         reply_markup=dealer_user_menu_kb(),
     )
 
