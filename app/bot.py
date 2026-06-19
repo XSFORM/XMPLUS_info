@@ -229,21 +229,14 @@ def _trunc(s: str, width: int) -> str:
 NOTE_W = 10
 
 def make_table_lines_without_id(items) -> tuple[str, list[str]]:
-    has_notes = any(getattr(it, "note", None) for it in items)
-    if has_notes:
-        header = f"{'USERID'.rjust(UID_W)} | {'USERNAME'.ljust(UNAME_W)} | {'КЛИЕНТ'.ljust(NOTE_W)} | DUE DATE"
-    else:
-        header = f"{'USERID'.rjust(UID_W)} | {'USERNAME'.ljust(UNAME_W)} | DUE DATE"
+    header = f"{'USERID'.rjust(UID_W)} | {'USERNAME'.ljust(UNAME_W)} | {'КЛИЕНТ'.ljust(NOTE_W)} | DUE DATE"
     rows: list[str] = []
     for it in items:
         uid = str(it.user_id).rjust(UID_W)
         uname = _trunc(it.username, UNAME_W).ljust(UNAME_W)
+        note = _trunc(getattr(it, "note", "") or "", NOTE_W).ljust(NOTE_W)
         due = fmt_dt_human(it.due_date)
-        if has_notes:
-            note = _trunc(getattr(it, "note", "") or "", NOTE_W).ljust(NOTE_W)
-            rows.append(f"{uid} | {uname} | {note} | {due}")
-        else:
-            rows.append(f"{uid} | {uname} | {due}")
+        rows.append(f"{uid} | {uname} | {note} | {due}")
     return header, rows
 
 def send_pre_chunk(message: Message, text: str):
