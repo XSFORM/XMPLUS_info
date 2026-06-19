@@ -56,10 +56,12 @@ async def check_expiries(bot: Bot) -> None:
 
             # 1) Предупреждение за N часов до истечения — один раз
             if it.notified_count == 0 and now < due and delta <= timedelta(hours=pre_hours):
+                note = getattr(it, "note", "") or ""
+                note_line = f" ({note})" if note else ""
                 text = (
                     "⏰ Уведомление\n"
                     f"Подписка отключится через {pre_hours} ч. ({tz_str})\n\n"
-                    f"Клиент: USERID={it.user_id}, USERNAME={it.username}\n"
+                    f"Клиент: USERID={it.user_id}, USERNAME={it.username}{note_line}\n"
                     f"Дата/время отключения: {fmt_dt_human(due)}"
                 )
                 try:
@@ -73,10 +75,12 @@ async def check_expiries(bot: Bot) -> None:
 
             # 2) Просрочка — строго один раз
             if now >= due and it.notified_count < settings.MAX_NOTIFICATIONS:
+                note = getattr(it, "note", "") or ""
+                note_line = f" ({note})" if note else ""
                 text = (
                     "⛔ Просрочено\n"
                     f"Срок подписки истёк ({fmt_dt_human(due)}; {tz_str}).\n\n"
-                    f"Клиент: USERID={it.user_id}, USERNAME={it.username}\n"
+                    f"Клиент: USERID={it.user_id}, USERNAME={it.username}{note_line}\n"
                     "Уточните у администратора."
                 )
                 try:
