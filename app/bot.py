@@ -3956,6 +3956,7 @@ def router_menu_kb() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="✏️ Изменить", callback_data="rt:edit"),
         ],
         [
+            InlineKeyboardButton(text="⛔ Отключённые", callback_data="rt:disabled"),
             InlineKeyboardButton(text="🗑 Удалить", callback_data="rt:delete"),
         ],
         [InlineKeyboardButton(text="◀ Главное меню", callback_data="rt:back")],
@@ -4068,6 +4069,29 @@ async def rt_list(cb: CallbackQuery) -> None:
     for ch in chunks:
         await send_pre_chunk(cb.message, ch)
     await cb.message.answer(f"Всего: {len(items)}", reply_markup=router_menu_kb())
+
+
+# ---- Отключённые роутеры ----
+
+@router.callback_query(F.data == "rt:disabled")
+async def rt_disabled(cb: CallbackQuery) -> None:
+    await cb.answer()
+    now = now_tz()
+    async with SessionLocal() as session:
+        items = (await session.execute(
+            select(RouterItem).order_by(RouterItem.due_date.asc())
+        )).scalars().all()
+    expired = [it for it in items if to_tz(it.due_date) <= now]
+    if not expired:
+        await cb.message.answer("📡 Отключённых роутеров нет.", reply_markup=router_menu_kb())
+        return
+    header, rows = _rt_table_lines(expired)
+    chunks = split_text_chunks(
+        f"⛔ Отключённые роутеры ({len(expired)}):\n{header}\n{'─' * len(header)}", rows
+    )
+    for ch in chunks:
+        await send_pre_chunk(cb.message, ch)
+    await cb.message.answer(f"Отключённых: {len(expired)}", reply_markup=router_menu_kb())
 
 
 # ---- Продлить роутер ----
@@ -4327,7 +4351,7 @@ async def rt_edit_field_save(message: Message, state: FSMContext) -> None:
         if field == "due_date":
             dt = parse_datetime_human(text)
             if dt is None:
-                await message.answer("Не удалось разобрать дату. Попробуйте ещё раз через ✏️ Изменить.", reply_markup=main_menu_kb())
+                await message.answer("Не удалось разобрать дату. Попробуйте ещё раз через ✒️ Изменить.", reply_markup=main_menu_kb())
                 return
             it.due_date = dt
             it.notified_count = 0
