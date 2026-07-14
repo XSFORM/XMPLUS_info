@@ -6,7 +6,7 @@ from aiogram import Bot
 from sqlalchemy import select
 
 from app.config import settings
-from app.db import SessionLocal, Item, Dealer
+from app.db import SessionLocal, Item, RouterItem, Dealer
 from app.utils import now_tz, fmt_dt_human, tz_offset_str, to_tz
 
 
@@ -90,5 +90,54 @@ async def check_expiries(bot: Bot) -> None:
                 else:
                     it.notified_count = settings.MAX_NOTIFICATIONS
                     it.last_notified_at = now
+
+        # ---- Роутеры: уведомления только администратору ----
+        routers = (await session.execute(
+            select(RouterItem).order_by(RouterItem.due_date.asc())
+        )).scalars().all()
+
+        for rt in routers:
+            if not owner_chat:
+                break
+            if rt.notified_count >= settings.MAX_NOTIFICATIONS:
+                continue
+
+            due = to_tz(rt.due_date)
+            delta = due - now
+            note = getattr(rt, "note", "") or ""
+            note_line = f"\nЗаметка: {note}" if note else ""
+
+            # 1) Предупреждение за N часов
+            if rt.notified_count == 0 and now < due and delta <= timedelta(hours=pre_hours):
+                text = (
+                    f"⏰ Роутер: уведомление\n"
+                    f"Подписка отключится через {pre_hours} ч. ({tz_str})\n\n"
+                    f"Клиент: {rt.client_name}{note_line}\n"
+                    f"Дата/время отключения: {fmt_dt_human(due)}"
+                )
+                try:
+                    await bot.send_message(owner_chat, text)
+                except Exception:
+                    pass
+                else:
+                    rt.notified_count = 1
+                    rt.last_notified_at = now
+                    continue
+
+            # 2) Просрочка
+            if now >= due and rt.notified_count < settings.MAX_NOTIFICATIONS:
+                text = (
+                    f"⛔ Роутер: просрочено\n"
+                    f"Срок подписки истёк ({fmt_dt_human(due)}; {tz_str}).\n\n"
+                    f"Клиент: {rt.client_name}{note_line}\n"
+                    "Продлите или удалите роутер."
+                )
+                try:
+                    await bot.send_message(owner_chat, text)
+                except Exception:
+                    pass
+                else:
+                    rt.notified_count = settings.MAX_NOTIFICATIONS
+                    rt.last_notified_at = now
 
         await session.commit()

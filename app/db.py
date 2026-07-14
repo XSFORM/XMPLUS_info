@@ -49,6 +49,18 @@ class Item(Base):
     last_notified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class RouterItem(Base):
+    """Роутер: клиент + дата отключения + заметка (без USERID)."""
+    __tablename__ = "routers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    client_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    due_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    note: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, default="")
+    notified_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_notified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class Dealer(Base):
     """Дилер для раздела /dealers (динамический список)."""
     __tablename__ = "dealers"
