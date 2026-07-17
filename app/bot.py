@@ -300,7 +300,7 @@ async def on_help(message: Message) -> None:
         return
     commands = BOT_COMMANDS_DEALER if is_dealer_mode() else BOT_COMMANDS_ADMIN
     text = "Доступные команды:\n" + "\n".join([f"/{c.command} — {c.description}" for c in commands])
-    await message.answer(text, reply_markup=main_menu_kb())
+    await message.answer(text)
 
 @router.message(Command("menu"))
 @router.message(F.text == "/menu")
@@ -329,7 +329,6 @@ async def on_status(message: Message) -> None:
     await message.answer(
         f"Бот работает ✅\nРежим: {role}{who}\nВ базе записей (в пределах вашей видимости): {len(total)}\n"
         f"ACTIVE_TZ: {get_active_timezone_name()} (UTC{tz_offset_str()})",
-        reply_markup=main_menu_kb(),
     )
 
 # ==== Таймзона ====
@@ -348,7 +347,7 @@ async def show_timezone(message: Message) -> None:
     if not ensure_allowed_user(message):
         return
     if is_dealer_mode():
-        await message.answer(ensure_admin_only(), reply_markup=main_menu_kb())
+        await message.answer(ensure_admin_only())
         return
     local_now = now_tz()
     utc_now = datetime.now(timezone.utc)
@@ -387,7 +386,7 @@ async def on_cancel(message: Message, state: FSMContext) -> None:
     if not ensure_allowed_user(message):
         return
     if is_dealer_mode():
-        await message.answer(ensure_admin_only(), reply_markup=main_menu_kb())
+        await message.answer(ensure_admin_only())
         return
     await state.clear()
     await message.answer("Отменено.", reply_markup=main_menu_kb())
@@ -398,27 +397,27 @@ async def add_start(message: Message, state: FSMContext) -> None:
     if not ensure_allowed_user(message):
         return
     if is_dealer_mode():
-        await message.answer(ensure_admin_only(), reply_markup=main_menu_kb())
+        await message.answer(ensure_admin_only())
         return
     await state.clear()
     await state.set_state(AddStates.waiting_user_id)
-    await message.answer("Шаг 1/4. Введите USER ID (число):", reply_markup=main_menu_kb())
+    await message.answer("Шаг 1/4. Введите USER ID (число):")
 
 @router.message(AddStates.waiting_user_id)
 async def add_user_id(message: Message, state: FSMContext) -> None:
     text = (message.text or "").strip()
     if not text.isdigit():
-        await message.answer("USER ID должен быть числом. Попробуйте ещё раз или /cancel.", reply_markup=main_menu_kb())
+        await message.answer("USER ID должен быть числом. Попробуйте ещё раз или /cancel.")
         return
     await state.update_data(user_id=int(text))
     await state.set_state(AddStates.waiting_username)
-    await message.answer("Шаг 2/4. Введите USERNAME (например, XmADMIN):", reply_markup=main_menu_kb())
+    await message.answer("Шаг 2/4. Введите USERNAME (например, XmADMIN):")
 
 @router.message(AddStates.waiting_username)
 async def add_username(message: Message, state: FSMContext) -> None:
     username = (message.text or "").strip()
     if not username:
-        await message.answer("USERNAME не может быть пустым. Попробуйте ещё раз или /cancel.", reply_markup=main_menu_kb())
+        await message.answer("USERNAME не может быть пустым. Попробуйте ещё раз или /cancel.")
         return
     await state.update_data(username=username)
     await state.set_state(AddStates.waiting_duedatetime)
@@ -426,7 +425,6 @@ async def add_username(message: Message, state: FSMContext) -> None:
         "Шаг 3/4. Введите дату и время отключения строго в формате:\n"
         "YYYY-MM-DD HH:MM:SS\n"
         "Пример: 2025-10-20 15:35:43",
-        reply_markup=main_menu_kb(),
     )
 
 @router.message(AddStates.waiting_duedatetime)
@@ -437,7 +435,6 @@ async def add_duedatetime(message: Message, state: FSMContext) -> None:
         await message.answer(
             "Неверный формат. Используйте только YYYY-MM-DD HH:MM:SS, например: 2025-10-20 15:35:43\n"
             "Попробуйте ещё раз или /cancel.",
-            reply_markup=main_menu_kb(),
         )
         return
     await state.update_data(due_date=dt.isoformat())
@@ -473,7 +470,6 @@ async def _save_new_item(message: Message, state: FSMContext, note: str) -> None
     note_str = f", Заметка: {note}" if note else ""
     await message.answer(
         f"Добавлено: [{item.id}] USERID={user_id}, USERNAME={username}, DUE={fmt_dt_human(dt)}{note_str}",
-        reply_markup=main_menu_kb(),
     )
 
 # ==== Продление (/renew) — только админ ====
@@ -491,31 +487,30 @@ def add_months(dt: datetime, months: int = 1) -> datetime:
     return dt.replace(year=y, month=m, day=d)
 
 
-
 @router.message(Command("renew"))
 @router.message(F.text.in_(["/renew", "🔄 Продлить"]))
 async def renew_start(message: Message, state: FSMContext) -> None:
     if not ensure_allowed_user(message):
         return
     if is_dealer_mode():
-        await message.answer(ensure_admin_only(), reply_markup=main_menu_kb())
+        await message.answer(ensure_admin_only())
         return
     await state.clear()
     await state.set_state(RenewStates.waiting_userid)
-    await message.answer("Укажи USERID клиента, которого нужно продлить:", reply_markup=main_menu_kb())
+    await message.answer("Укажи USERID клиента, которого нужно продлить:")
 
 @router.message(RenewStates.waiting_userid)
 async def renew_find_by_userid(message: Message, state: FSMContext) -> None:
     text = (message.text or "").strip()
     if not text.isdigit():
-        await message.answer("USERID должен быть числом. Введите ещё раз или /cancel.", reply_markup=main_menu_kb())
+        await message.answer("USERID должен быть числом. Введите ещё раз или /cancel.")
         return
     uid = int(text)
     async with SessionLocal() as session:
         result = await session.execute(select(Item).where(Item.user_id == uid).order_by(Item.due_date.asc()))
         items = result.scalars().all()
     if not items:
-        await message.answer("Записей с таким USERID не найдено. Проверьте число или /cancel.", reply_markup=main_menu_kb())
+        await message.answer("Записей с таким USERID не найдено. Проверьте число или /cancel.")
         return
     if len(items) == 1:
         it = items[0]
@@ -532,7 +527,7 @@ async def renew_find_by_userid(message: Message, state: FSMContext) -> None:
             f"Текущая дата отключения: {fmt_dt_human(it.due_date)}",
             reply_markup=kb,
         )
-        await message.answer("Отправьте новую дату в формате:\nYYYY-MM-DD HH:MM:SS", reply_markup=main_menu_kb())
+        await message.answer("Отправьте новую дату в формате:\nYYYY-MM-DD HH:MM:SS")
         return
     kb = choose_by_due_kb("renew", items)
     await message.answer("Найдено несколько записей по этому USERID. Выберите запись по дате:", reply_markup=kb)
@@ -547,7 +542,7 @@ async def renew_choose_item(cb: CallbackQuery, state: FSMContext) -> None:
     async with SessionLocal() as session:
         it = await session.get(Item, item_id)
     if not it:
-        await cb.message.answer("Запись не найдена. Попробуйте снова /renew.", reply_markup=main_menu_kb())
+        await cb.message.answer("Запись не найдена. Попробуйте снова /renew.")
         return
     await state.update_data(item_id=it.id, user_id=it.user_id, username=it.username, old_due=fmt_dt_human(it.due_date))
     await state.set_state(RenewStates.waiting_new_due)
@@ -562,7 +557,7 @@ async def renew_choose_item(cb: CallbackQuery, state: FSMContext) -> None:
         f"Текущая дата отключения: {fmt_dt_human(it.due_date)}",
         reply_markup=kb,
     )
-    await cb.message.answer("Отправьте новую дату в формате:\nYYYY-MM-DD HH:MM:SS", reply_markup=main_menu_kb())
+    await cb.message.answer("Отправьте новую дату в формате:\nYYYY-MM-DD HH:MM:SS")
 
 @router.callback_query(F.data.startswith("renew:prefill:"))
 async def renew_prefill(cb: CallbackQuery, state: FSMContext) -> None:
@@ -600,13 +595,12 @@ async def renew_prefill(cb: CallbackQuery, state: FSMContext) -> None:
     )
 
 
-
 @router.message(RenewStates.waiting_new_due)
 async def renew_get_new_due(message: Message, state: FSMContext) -> None:
     s = (message.text or "").strip()
     dt = parse_datetime_human(s)
     if not dt:
-        await message.answer("Неверный формат даты. Используйте YYYY-MM-DD HH:MM:SS.\nПопробуйте ещё раз или /cancel.", reply_markup=main_menu_kb())
+        await message.answer("Неверный формат даты. Используйте YYYY-MM-DD HH:MM:SS.\nПопробуйте ещё раз или /cancel.")
         return
     new_due = fmt_dt_human(dt)
     data = await state.get_data()
@@ -630,7 +624,6 @@ async def renew_confirm_edit(cb: CallbackQuery, state: FSMContext) -> None:
     hint = f"\nПодсказка: {suggested}" if suggested else ""
     await cb.message.answer(
         f"Отправьте новую дату в формате:\nYYYY-MM-DD HH:MM:SS{hint}",
-        reply_markup=main_menu_kb(),
     )
 
 
@@ -638,7 +631,7 @@ async def renew_confirm_edit(cb: CallbackQuery, state: FSMContext) -> None:
 async def renew_confirm_cancel(cb: CallbackQuery, state: FSMContext) -> None:
     await cb.answer()
     await state.clear()
-    await cb.message.answer("Отменено.", reply_markup=main_menu_kb())
+    await cb.message.answer("Отменено.")
 
 
 @router.callback_query(F.data == "cfr:ok", RenewStates.waiting_confirm)
@@ -654,12 +647,12 @@ async def renew_confirm(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
         item = await session.get(Item, item_id)
         if not item:
             await state.clear()
-            await cb.message.answer("Запись не найдена.", reply_markup=main_menu_kb())
+            await cb.message.answer("Запись не найдена.")
             return
         dt = parse_datetime_human(new_due_str)
         if not dt:
             await state.clear()
-            await cb.message.answer("Ошибка при парсинге даты. Операция отменена.", reply_markup=main_menu_kb())
+            await cb.message.answer("Ошибка при парсинге даты. Операция отменена.")
             return
         item.due_date = dt
         item.notified_count = 0
@@ -671,7 +664,6 @@ async def renew_confirm(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     await state.clear()
     await cb.message.answer(
         f"✅ Продлено: USERID={data['user_id']}, USERNAME={data['username']}\nНовая дата DUE={new_due_str}",
-        reply_markup=main_menu_kb(),
     )
     # Начислить долг дилеру за продление и уведомить его
     if dealer_code and dealer_code != MAIN_CODE:
@@ -708,28 +700,27 @@ async def delete_start(message: Message, state: FSMContext) -> None:
     if not ensure_allowed_user(message):
         return
     if is_dealer_mode():
-        await message.answer(ensure_admin_only(), reply_markup=main_menu_kb())
+        await message.answer(ensure_admin_only())
         return
     await state.clear()
     await state.set_state(DeleteStates.waiting_userid)
     await message.answer(
         "Укажи USERID клиента, которого нужно удалить.\n"
         "Если по USERID несколько записей — предложу выбрать по дате или удалить все сразу.",
-        reply_markup=main_menu_kb(),
     )
 
 @router.message(DeleteStates.waiting_userid)
 async def delete_by_userid(message: Message, state: FSMContext) -> None:
     text = (message.text or "").strip()
     if not text.isdigit():
-        await message.answer("USERID должен быть числом. Введите ещё раз или /cancel.", reply_markup=main_menu_kb())
+        await message.answer("USERID должен быть числом. Введите ещё раз или /cancel.")
         return
     uid = int(text)
     async with SessionLocal() as session:
         result = await session.execute(select(Item).where(Item.user_id == uid).order_by(Item.due_date.asc()))
         items = result.scalars().all()
     if not items:
-        await message.answer("По этому USERID записей нет. Проверьте число или /cancel.", reply_markup=main_menu_kb())
+        await message.answer("По этому USERID записей нет. Проверьте число или /cancel.")
         return
     if len(items) == 1:
         it = items[0]
@@ -752,7 +743,7 @@ async def delete_choose_one(cb: CallbackQuery, state: FSMContext) -> None:
     async with SessionLocal() as session:
         it = await session.get(Item, item_id)
     if not it:
-        await cb.message.answer("Запись не найдена. Попробуйте снова /delete.", reply_markup=main_menu_kb())
+        await cb.message.answer("Запись не найдена. Попробуйте снова /delete.")
         return
     preview = f"USERID={it.user_id}, USERNAME={it.username}, DUE={fmt_dt_human(it.due_date)}"
     await state.update_data(action="one", item_id=it.id, user_id=it.user_id)
@@ -774,7 +765,7 @@ async def delete_choose_all(cb: CallbackQuery, state: FSMContext) -> None:
 async def delete_confirm_cancel(cb: CallbackQuery, state: FSMContext) -> None:
     await cb.answer()
     await state.clear()
-    await cb.message.answer("Отменено.", reply_markup=main_menu_kb())
+    await cb.message.answer("Отменено.")
 
 
 @router.callback_query(F.data == "cfd:ok", DeleteStates.waiting_confirm)
@@ -791,7 +782,7 @@ async def delete_confirm(cb: CallbackQuery, state: FSMContext) -> None:
             await session.commit()
             msg = f"🗑️ Удалены все записи для USERID={data['user_id']}"
     await state.clear()
-    await cb.message.answer(msg, reply_markup=main_menu_kb())
+    await cb.message.answer(msg)
 
 @router.callback_query(F.data == "list:export_csv")
 async def list_export_csv(cb: CallbackQuery) -> None:
@@ -853,14 +844,13 @@ async def edit_start(message: Message, state: FSMContext) -> None:
     if not ensure_allowed_user(message):
         return
     if is_dealer_mode():
-        await message.answer(ensure_admin_only(), reply_markup=main_menu_kb())
+        await message.answer(ensure_admin_only())
         return
     await state.clear()
     await state.set_state(EditStates.waiting_search)
     await message.answer(
         "\u270f\ufe0f \u0420\u0435\u0434\u0430\u043a\u0442\u043e\u0440 \u043a\u043b\u044e\u0447\u0435\u0439\n\n"
         "\u0412\u0432\u0435\u0434\u0438\u0442\u0435 USERID \u0438\u043b\u0438 \u0438\u043c\u044f \u043a\u043b\u0438\u0435\u043d\u0442\u0430 \u0434\u043b\u044f \u043f\u043e\u0438\u0441\u043a\u0430:",
-        reply_markup=main_menu_kb(),
     )
 
 
@@ -911,7 +901,7 @@ async def edit_pick(cb: CallbackQuery) -> None:
     async with SessionLocal() as session:
         it = (await session.execute(select(Item).where(Item.id == item_id))).scalars().first()
     if not it:
-        await cb.message.answer("\u0417\u0430\u043f\u0438\u0441\u044c \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u0430.", reply_markup=main_menu_kb())
+        await cb.message.answer("\u0417\u0430\u043f\u0438\u0441\u044c \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u0430.")
         return
     await cb.message.answer(
         f"\U0001f4cb {_item_card(it)}",
@@ -951,7 +941,7 @@ async def edit_field_save(message: Message, state: FSMContext) -> None:
         it = (await session.execute(select(Item).where(Item.id == item_id))).scalars().first()
         if not it:
             await state.clear()
-            await message.answer("\u0417\u0430\u043f\u0438\u0441\u044c \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u0430.", reply_markup=main_menu_kb())
+            await message.answer("\u0417\u0430\u043f\u0438\u0441\u044c \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u0430.")
             return
         if field == "user_id":
             if not text.isdigit():
@@ -981,7 +971,7 @@ async def edit_field_save(message: Message, state: FSMContext) -> None:
 async def edit_back(cb: CallbackQuery, state: FSMContext) -> None:
     await cb.answer()
     await state.clear()
-    await cb.message.answer("\u0413\u043e\u0442\u043e\u0432\u043e.", reply_markup=main_menu_kb())
+    await cb.message.answer("\u0413\u043e\u0442\u043e\u0432\u043e.")
 
 
 # ==== Списки ====
@@ -995,7 +985,7 @@ async def on_list(message: Message) -> None:
         q = dealer_filter(select(Item).order_by(Item.due_date.asc()))
         items = (await session.execute(q)).scalars().all()
     if not items:
-        await message.answer("Список пуст.", reply_markup=main_menu_kb())
+        await message.answer("Список пуст.")
         return
     header, lines = make_table_lines_without_id(items)
     chunks = split_text_chunks(header, lines)
@@ -1018,7 +1008,7 @@ async def on_disabled(message: Message) -> None:
         items = (await session.execute(q)).scalars().all()
     expired = [it for it in items if to_tz(it.due_date) <= now]
     if not expired:
-        await message.answer("Отключённых (просроченных) нет.", reply_markup=main_menu_kb())
+        await message.answer("Отключённых (просроченных) нет.")
         return
     header, lines = make_table_lines_without_id(expired)
     header = "Disabled (просроченные):\n" + "-" * 40 + "\n" + header
@@ -1039,7 +1029,7 @@ async def on_next(message: Message) -> None:
         all_items = (await session.execute(q)).scalars().all()
     window = [it for it in all_items if now < to_tz(it.due_date) <= end]
     if not window:
-        await message.answer("Нет истечений в ближайшие 3 дня.", reply_markup=main_menu_kb())
+        await message.answer("Нет истечений в ближайшие 3 дня.")
         return
     header, lines = make_table_lines_without_id(window)
     header = "Ближайшие (до 3 дней):\n" + "-" * 40 + "\n" + header
@@ -1134,7 +1124,7 @@ async def dealers_home(message: Message, state: FSMContext) -> None:
     if not ensure_allowed_user(message):
         return
     if is_dealer_mode():
-        await message.answer(ensure_admin_only(), reply_markup=main_menu_kb())
+        await message.answer(ensure_admin_only())
         return
     await state.clear()
     text = await dealers_counts_text()
@@ -1212,7 +1202,6 @@ async def dealers_assign_start(cb: CallbackQuery, state: FSMContext) -> None:
         "Отправьте список USERID через запятую/пробел/новую строку.\n"
         "Пример: 1323, 2005, 1383\n"
         "После этого предложу выбрать дилера.",
-        reply_markup=main_menu_kb(),
     )
 
 def parse_user_ids(text: str) -> List[int]:
@@ -1236,7 +1225,7 @@ async def dealers_pick_kb() -> InlineKeyboardMarkup:
 @router.message(DealerAssignStates.waiting_ids)
 async def dealers_assign_ids(message: Message, state: FSMContext) -> None:
     if is_dealer_mode():
-        await message.answer(ensure_admin_only(), reply_markup=main_menu_kb())
+        await message.answer(ensure_admin_only())
         return
     ids = parse_user_ids(message.text or "")
     if not ids:
@@ -1316,7 +1305,6 @@ async def dealer_add_start(cb: CallbackQuery, state: FSMContext) -> None:
         "(буквы, цифры, _ ; 2–32 символа). Например: vasya\n"
         "Если такой код уже есть — данные дилера будут обновлены.\n\n"
         "Отмена — /cancel",
-        reply_markup=main_menu_kb(),
     )
 
 
@@ -1324,20 +1312,18 @@ async def dealer_add_start(cb: CallbackQuery, state: FSMContext) -> None:
 async def dealer_add_code(message: Message, state: FSMContext) -> None:
     code = (message.text or "").strip().lower()
     if code == MAIN_CODE:
-        await message.answer("Код «main» зарезервирован системой. Введите другой код или /cancel.", reply_markup=main_menu_kb())
+        await message.answer("Код «main» зарезервирован системой. Введите другой код или /cancel.")
         return
     if not DEALER_CODE_RE.match(code):
         await message.answer(
             "Неверный код. Разрешены латинские буквы, цифры и _ (2–32 символа), без пробелов.\n"
             "Попробуйте ещё раз или /cancel.",
-            reply_markup=main_menu_kb(),
         )
         return
     await state.update_data(code=code)
     await state.set_state(AddDealerStates.waiting_title)
     await message.answer(
         "Шаг 2/3. Введите НАЗВАНИЕ дилера — как показывать в меню (например: Вася):",
-        reply_markup=main_menu_kb(),
     )
 
 
@@ -1345,14 +1331,13 @@ async def dealer_add_code(message: Message, state: FSMContext) -> None:
 async def dealer_add_title(message: Message, state: FSMContext) -> None:
     title = (message.text or "").strip()
     if not title or len(title) > 64:
-        await message.answer("Название не может быть пустым или длиннее 64 символов. Ещё раз или /cancel.", reply_markup=main_menu_kb())
+        await message.answer("Название не может быть пустым или длиннее 64 символов. Ещё раз или /cancel.")
         return
     await state.update_data(title=title)
     await state.set_state(AddDealerStates.waiting_chat_id)
     await message.answer(
         "Шаг 3/3. Введите Telegram ID дилера (число) — на него бот будет отправлять сообщения.\n"
         "Если ID пока неизвестен — отправьте «-» (можно задать позже, добавив дилера с тем же кодом).",
-        reply_markup=main_menu_kb(),
     )
 
 
@@ -1363,7 +1348,7 @@ async def dealer_add_chat_id(message: Message, state: FSMContext) -> None:
     if raw not in ("-", "—"):
         digits = raw[1:] if raw.startswith("-") else raw
         if not digits.isdigit():
-            await message.answer("Telegram ID должен быть числом, либо «-» чтобы пропустить. Ещё раз или /cancel.", reply_markup=main_menu_kb())
+            await message.answer("Telegram ID должен быть числом, либо «-» чтобы пропустить. Ещё раз или /cancel.")
             return
         chat_id = int(raw)
     data = await state.get_data()
@@ -1371,7 +1356,7 @@ async def dealer_add_chat_id(message: Message, state: FSMContext) -> None:
     title = data.get("title")
     if not code or not title:
         await state.clear()
-        await message.answer("Ввод сброшен. Начните заново через /dealers.", reply_markup=main_menu_kb())
+        await message.answer("Ввод сброшен. Начните заново через /dealers.")
         return
     async with SessionLocal() as session:
         existing = (await session.execute(select(Dealer).where(Dealer.code == code))).scalars().first()
@@ -1387,7 +1372,6 @@ async def dealer_add_chat_id(message: Message, state: FSMContext) -> None:
     cid_txt = str(chat_id) if chat_id is not None else "не задан"
     await message.answer(
         f"✅ Дилер {action}: {title}\nКод: {code}\nTelegram ID: {cid_txt}",
-        reply_markup=main_menu_kb(),
     )
     await message.answer(await dealers_counts_text(), reply_markup=await dealers_menu_kb())
 
@@ -1516,7 +1500,6 @@ async def dealer_msg_pick(cb: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(MsgDealerStates.waiting_text)
     await cb.message.answer(
         f"Введите текст сообщения для дилера «{d.title}».\nОтмена — /cancel",
-        reply_markup=main_menu_kb(),
     )
 
 
@@ -1524,7 +1507,7 @@ async def dealer_msg_pick(cb: CallbackQuery, state: FSMContext) -> None:
 async def dealer_msg_send(message: Message, state: FSMContext, bot: Bot) -> None:
     text = (message.text or "").strip()
     if not text:
-        await message.answer("Пустое сообщение. Введите текст или /cancel.", reply_markup=main_menu_kb())
+        await message.answer("Пустое сообщение. Введите текст или /cancel.")
         return
     data = await state.get_data()
     code = data.get("target_code")
@@ -1570,7 +1553,6 @@ async def dealer_broadcast_start(cb: CallbackQuery, state: FSMContext) -> None:
     await cb.message.answer(
         f"Рассылка для {len(targets)} дилеров: {names}\n\n"
         "Введите текст сообщения. Отмена — /cancel",
-        reply_markup=main_menu_kb(),
     )
 
 
@@ -1578,7 +1560,7 @@ async def dealer_broadcast_start(cb: CallbackQuery, state: FSMContext) -> None:
 async def dealer_broadcast_send(message: Message, state: FSMContext, bot: Bot) -> None:
     text = (message.text or "").strip()
     if not text:
-        await message.answer("Пустое сообщение. Введите текст или /cancel.", reply_markup=main_menu_kb())
+        await message.answer("Пустое сообщение. Введите текст или /cancel.")
         return
     await state.clear()
     targets = [d for d in await list_dealers() if d.chat_id is not None]
@@ -1614,7 +1596,7 @@ if is_dealer_mode():
     async def dealer_stub(message: Message) -> None:
         if not ensure_allowed_user(message):
             return
-        await message.answer(ensure_admin_only(), reply_markup=main_menu_kb())
+        await message.answer(ensure_admin_only())
 
 
 # ====== Кабинет дилера (единый бот, роль 'dealer') ======
@@ -1653,7 +1635,7 @@ async def dealer_on_start(message: Message, state: FSMContext) -> None:
 async def dealer_on_help(message: Message, state: FSMContext) -> None:
     await state.clear()
     text = "Доступные команды:\n" + "\n".join(f"/{c.command} — {c.description}" for c in BOT_COMMANDS_DEALER)
-    await message.answer(text, reply_markup=dealer_user_menu_kb())
+    await message.answer(text)
 
 
 @dealer_router.message(Command("list"))
@@ -1667,14 +1649,14 @@ async def dealer_on_list(message: Message, state: FSMContext) -> None:
         q = select(Item).where(Item.dealer == d.code).order_by(Item.due_date.asc())
         items = (await session.execute(q)).scalars().all()
     if not items:
-        await message.answer("Список пуст.", reply_markup=dealer_user_menu_kb())
+        await message.answer("Список пуст.")
         return
     header, lines = make_table_lines_without_id(items)
     chunks = split_text_chunks(header, lines)
     for i, ch in enumerate(chunks, 1):
         suffix = f"\n(стр. {i}/{len(chunks)})" if len(chunks) > 1 else ""
         await send_pre_chunk(message, ch + suffix)
-    await message.answer(f"Всего записей: {len(items)}", reply_markup=dealer_user_menu_kb())
+    await message.answer(f"Всего записей: {len(items)}")
 
 
 @dealer_router.message(Command("disabled"))
@@ -1690,7 +1672,7 @@ async def dealer_on_disabled(message: Message, state: FSMContext) -> None:
         items = (await session.execute(q)).scalars().all()
     expired = [it for it in items if to_tz(it.due_date) <= now]
     if not expired:
-        await message.answer("Отключённых (просроченных) нет.", reply_markup=dealer_user_menu_kb())
+        await message.answer("Отключённых (просроченных) нет.")
         return
     header, lines = make_table_lines_without_id(expired)
     header = "Disabled (просроченные):\n" + "-" * 40 + "\n" + header
@@ -1714,7 +1696,7 @@ async def dealer_on_next(message: Message, state: FSMContext) -> None:
         items = (await session.execute(q)).scalars().all()
     window = [it for it in items if now < to_tz(it.due_date) <= end]
     if not window:
-        await message.answer("Нет истечений в ближайшие 3 дня.", reply_markup=dealer_user_menu_kb())
+        await message.answer("Нет истечений в ближайшие 3 дня.")
         return
     header, lines = make_table_lines_without_id(window)
     header = "Ближайшие (до 3 дней):\n" + "-" * 40 + "\n" + header
@@ -1735,10 +1717,7 @@ async def dealer_on_status(message: Message, state: FSMContext) -> None:
         cnt = len((await session.execute(select(Item.id).where(Item.dealer == d.code))).all())
     await message.answer(
         f"Бот работает ✅\nДилер: {d.title}\nВаших записей: {cnt}",
-        reply_markup=dealer_user_menu_kb(),
     )
-
-
 
 
 # ===== Редактирование имени клиента (дилер) =====
@@ -1758,7 +1737,6 @@ async def dealer_edit_start(message: Message, state: FSMContext) -> None:
     await state.set_state(DealerEditStates.waiting_search)
     await message.answer(
         "✏️ Редактор\n\nВведите USERID для поиска:",
-        reply_markup=dealer_user_menu_kb(),
     )
 
 
@@ -1818,7 +1796,7 @@ async def dealer_edit_pick(cb: CallbackQuery, state: FSMContext) -> None:
     async with SessionLocal() as session:
         it = (await session.execute(select(Item).where(Item.id == item_id, Item.dealer == d.code))).scalars().first()
     if not it:
-        await cb.message.answer("Запись не найдена.", reply_markup=dealer_user_menu_kb())
+        await cb.message.answer("Запись не найдена.")
         return
     note = getattr(it, "note", "") or ""
     dash = "—"
@@ -1846,14 +1824,13 @@ async def dealer_edit_save(message: Message, state: FSMContext) -> None:
         it = (await session.execute(select(Item).where(Item.id == item_id, Item.dealer == d.code))).scalars().first()
         if not it:
             await state.clear()
-            await message.answer("Запись не найдена.", reply_markup=dealer_user_menu_kb())
+            await message.answer("Запись не найдена.")
             return
         it.note = text
         await session.commit()
     await state.clear()
     await message.answer(
         f"✅ Имя клиента обновлено: {text}",
-        reply_markup=dealer_user_menu_kb(),
     )
 
 
@@ -1945,7 +1922,6 @@ async def dealer_order_collect_name(message: Message, state: FSMContext, bot: Bo
     await message.answer(
         f"✅ Запрос на {total} ключей отправлен администратору.\n"
         f"Клиенты:\n{names_list}\n\nОжидайте.",
-        reply_markup=dealer_user_menu_kb(),
     )
 
 
@@ -1953,7 +1929,7 @@ async def dealer_order_collect_name(message: Message, state: FSMContext, bot: Bo
 async def dealer_order_cancel(cb: CallbackQuery, state: FSMContext) -> None:
     await cb.answer()
     await state.clear()
-    await cb.message.answer("Отменено.", reply_markup=dealer_user_menu_kb())
+    await cb.message.answer("Отменено.")
 
 
 # ===== Запрос дилера на продление клиента =====
@@ -1979,7 +1955,6 @@ async def dealer_renew_start(message: Message, state: FSMContext) -> None:
         "Продление клиента.\n"
         "Введите USERID клиента, которого хотите продлить.\n"
         "Отмена — /cancel",
-        reply_markup=dealer_user_menu_kb(),
     )
 
 
@@ -2002,20 +1977,20 @@ async def dealer_renew_userid(message: Message, state: FSMContext) -> None:
         return
     text = (message.text or "").strip()
     if not text.isdigit():
-        await message.answer("USERID должен быть числом. Введите ещё раз или /cancel.", reply_markup=dealer_user_menu_kb())
+        await message.answer("USERID должен быть числом. Введите ещё раз или /cancel.")
         return
     uid = int(text)
     async with SessionLocal() as session:
         q = select(Item).where(Item.dealer == d.code, Item.user_id == uid).order_by(Item.due_date.asc())
         items = (await session.execute(q)).scalars().all()
     if not items:
-        await message.answer("Клиент с таким USERID не найден среди ваших. Введите ещё раз или /cancel.", reply_markup=dealer_user_menu_kb())
+        await message.answer("Клиент с таким USERID не найден среди ваших. Введите ещё раз или /cancel.")
         return
     if len(items) == 1:
         it = items[0]
         await state.update_data(item_id=it.id)
         await state.set_state(DealerRenewStates.waiting_comment)
-        await message.answer(_dealer_renew_comment_prompt(it), reply_markup=dealer_user_menu_kb())
+        await message.answer(_dealer_renew_comment_prompt(it))
         return
     kb = choose_by_due_kb("drenew", items)
     await message.answer("Найдено несколько записей с этим USERID. Выберите нужную:", reply_markup=kb)
@@ -2034,11 +2009,11 @@ async def dealer_renew_choose(cb: CallbackQuery, state: FSMContext) -> None:
     async with SessionLocal() as session:
         it = await session.get(Item, item_id)
     if not it or it.dealer != d.code:
-        await cb.message.answer("Запись не найдена среди ваших клиентов.", reply_markup=dealer_user_menu_kb())
+        await cb.message.answer("Запись не найдена среди ваших клиентов.")
         return
     await state.update_data(item_id=it.id)
     await state.set_state(DealerRenewStates.waiting_comment)
-    await cb.message.answer(_dealer_renew_comment_prompt(it), reply_markup=dealer_user_menu_kb())
+    await cb.message.answer(_dealer_renew_comment_prompt(it))
 
 
 @dealer_router.message(DealerRenewStates.waiting_comment)
@@ -2053,12 +2028,12 @@ async def dealer_renew_comment(message: Message, state: FSMContext, bot: Bot) ->
     item_id = data.get("item_id")
     await state.clear()
     if not item_id:
-        await message.answer("Что-то пошло не так. Начните заново — /renew.", reply_markup=dealer_user_menu_kb())
+        await message.answer("Что-то пошло не так. Начните заново — /renew.")
         return
     async with SessionLocal() as session:
         it = await session.get(Item, int(item_id))
     if not it or it.dealer != d.code:
-        await message.answer("Запись не найдена среди ваших клиентов.", reply_markup=dealer_user_menu_kb())
+        await message.answer("Запись не найдена среди ваших клиентов.")
         return
     owner_chat = int(settings.OWNER_CHAT_ID) if settings.OWNER_CHAT_ID else None
     if owner_chat:
@@ -2080,7 +2055,6 @@ async def dealer_renew_comment(message: Message, state: FSMContext, bot: Bot) ->
             pass
     await message.answer(
         "✅ Запрос на продление отправлен администратору. Ожидайте подтверждения.",
-        reply_markup=dealer_user_menu_kb(),
     )
 
 
@@ -2119,7 +2093,7 @@ async def dealer_on_balance(message: Message, state: FSMContext) -> None:
             lines.append(_fmt_txn(t))
     else:
         lines.append("Операций пока нет.")
-    await message.answer("\n".join(lines), reply_markup=dealer_user_menu_kb())
+    await message.answer("\n".join(lines))
 
 
 # ===== Оплата (дилер) =====
@@ -2135,7 +2109,6 @@ async def _dealer_show_methods(target, d: Dealer) -> None:
         await target.answer(
             f"💳 Оплата\nВаш долг: ${bal:g}\n\n"
             "Методы оплаты пока не настроены. Обратитесь к администратору.",
-            reply_markup=dealer_user_menu_kb(),
         )
         return
     rows = [[InlineKeyboardButton(text=m.name, callback_data=f"dpay:m:{m.id}")] for m in methods]
@@ -2173,7 +2146,7 @@ async def dealer_pay_method(cb: CallbackQuery) -> None:
         return
     m = await get_payment_method(pm_id)
     if not m or not m.active:
-        await cb.message.answer("Метод недоступен.", reply_markup=dealer_user_menu_kb())
+        await cb.message.answer("Метод недоступен.")
         return
     variants = await list_payment_variants(pm_id, active_only=True)
     if not variants:
@@ -2201,11 +2174,11 @@ async def dealer_pay_variant(cb: CallbackQuery) -> None:
         return
     v = await get_payment_variant(v_id)
     if not v or not v.active:
-        await cb.message.answer("Вид оплаты недоступен.", reply_markup=dealer_user_menu_kb())
+        await cb.message.answer("Вид оплаты недоступен.")
         return
     m = await get_payment_method(v.method_id)
     if not m or not m.active:
-        await cb.message.answer("Метод недоступен.", reply_markup=dealer_user_menu_kb())
+        await cb.message.answer("Метод недоступен.")
         return
     req = (v.requisites or "").strip() or "(реквизиты не указаны, обратитесь к администратору)"
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -2227,18 +2200,17 @@ async def dealer_pay_start(cb: CallbackQuery, state: FSMContext) -> None:
         return
     v = await get_payment_variant(v_id)
     if not v or not v.active:
-        await cb.message.answer("Вид оплаты недоступен.", reply_markup=dealer_user_menu_kb())
+        await cb.message.answer("Вид оплаты недоступен.")
         return
     m = await get_payment_method(v.method_id)
     if not m or not m.active:
-        await cb.message.answer("Метод недоступен.", reply_markup=dealer_user_menu_kb())
+        await cb.message.answer("Метод недоступен.")
         return
     await state.clear()
     await state.update_data(pay_method=m.name, pay_variant=v.name)
     await state.set_state(DealerPayStates.waiting_amount)
     await cb.message.answer(
         f"Метод: {m.name} → {v.name}\nВведите сумму в $, которую вы перечислили. Отмена — /cancel",
-        reply_markup=dealer_user_menu_kb(),
     )
 
 
@@ -2250,14 +2222,14 @@ async def dealer_pay_amount(message: Message, state: FSMContext, bot: Bot) -> No
         return
     amount = _parse_amount(message.text or "")
     if amount is None:
-        await message.answer("Введите положительное число (например 5). Ещё раз или /cancel.", reply_markup=dealer_user_menu_kb())
+        await message.answer("Введите положительное число (например 5). Ещё раз или /cancel.")
         return
     data = await state.get_data()
     method = data.get("pay_method")
     variant = data.get("pay_variant")
     await state.clear()
     if not method:
-        await message.answer("Что-то пошло не так. Начните заново — /pay.", reply_markup=dealer_user_menu_kb())
+        await message.answer("Что-то пошло не так. Начните заново — /pay.")
         return
     async with SessionLocal() as session:
         pay = Payment(dealer_code=d.code, method=method, variant=variant, amount=amount, status="pending")
@@ -2286,7 +2258,6 @@ async def dealer_pay_amount(message: Message, state: FSMContext, bot: Bot) -> No
         f"✅ Заявка на оплату отправлена администратору.\n"
         f"Метод: {method} → {variant or '—'}\nСумма: ${amount:g}\n"
         "Долг уменьшится после подтверждения.",
-        reply_markup=dealer_user_menu_kb(),
     )
 
 
@@ -2295,7 +2266,6 @@ async def dealer_fallback(message: Message) -> None:
     cmds = ", ".join(f"/{c.command}" for c in BOT_COMMANDS_DEALER if c.command not in ("start", "help"))
     await message.answer(
         f"Доступные команды: {cmds}.",
-        reply_markup=dealer_user_menu_kb(),
     )
 
 
@@ -2323,7 +2293,7 @@ async def renew_request_approve(cb: CallbackQuery, state: FSMContext) -> None:
     async with SessionLocal() as session:
         it = await session.get(Item, item_id)
     if not it:
-        await cb.message.answer("Запись не найдена (возможно, удалена).", reply_markup=main_menu_kb())
+        await cb.message.answer("Запись не найдена (возможно, удалена).")
         return
     await state.clear()
     await state.update_data(item_id=it.id, user_id=it.user_id, username=it.username, old_due=fmt_dt_human(it.due_date))
@@ -2339,7 +2309,7 @@ async def renew_request_approve(cb: CallbackQuery, state: FSMContext) -> None:
         f"Текущая дата отключения: {fmt_dt_human(it.due_date)}",
         reply_markup=kb,
     )
-    await cb.message.answer("Отправьте новую дату в формате:\nYYYY-MM-DD HH:MM:SS", reply_markup=main_menu_kb())
+    await cb.message.answer("Отправьте новую дату в формате:\nYYYY-MM-DD HH:MM:SS")
 
 
 @router.callback_query(F.data.startswith("rreq:no:"))
@@ -2352,7 +2322,7 @@ async def renew_request_reject(cb: CallbackQuery, bot: Bot) -> None:
     async with SessionLocal() as session:
         it = await session.get(Item, item_id)
     if not it:
-        await cb.message.answer("Запись не найдена (возможно, удалена).", reply_markup=main_menu_kb())
+        await cb.message.answer("Запись не найдена (возможно, удалена).")
         return
     dealer_code = it.dealer
     user_id = it.user_id
@@ -2369,7 +2339,6 @@ async def renew_request_reject(cb: CallbackQuery, bot: Bot) -> None:
             pass
     await cb.message.answer(
         f"Запрос отклонён. USERID={user_id}, USERNAME={username}.",
-        reply_markup=main_menu_kb(),
     )
 
 
@@ -2430,7 +2399,7 @@ async def on_balance(message: Message, state: FSMContext) -> None:
     if not ensure_allowed_user(message):
         return
     if is_dealer_mode():
-        await message.answer(ensure_admin_only(), reply_markup=main_menu_kb())
+        await message.answer(ensure_admin_only())
         return
     await state.clear()
     await message.answer(await balance_overview_text(), reply_markup=balance_menu_kb())
@@ -2481,7 +2450,6 @@ async def bal_pick(cb: CallbackQuery, state: FSMContext) -> None:
     await cb.message.answer(
         f"Дилер: {d.title} (текущий долг ${(d.balance or 0.0):g})\n"
         f"Введите сумму в $, которую нужно {word}. Отмена — /cancel",
-        reply_markup=main_menu_kb(),
     )
 
 
@@ -2489,13 +2457,12 @@ async def bal_pick(cb: CallbackQuery, state: FSMContext) -> None:
 async def bal_amount(message: Message, state: FSMContext) -> None:
     amount = _parse_amount(message.text or "")
     if amount is None:
-        await message.answer("Введите положительное число (например 5). Ещё раз или /cancel.", reply_markup=main_menu_kb())
+        await message.answer("Введите положительное число (например 5). Ещё раз или /cancel.")
         return
     await state.update_data(bal_amount=amount)
     await state.set_state(BalanceStates.waiting_comment)
     await message.answer(
         "Введите комментарий к операции (например «корректировка») или «-», чтобы пропустить.",
-        reply_markup=main_menu_kb(),
     )
 
 
@@ -2509,17 +2476,17 @@ async def bal_comment(message: Message, state: FSMContext, bot: Bot) -> None:
     code = data.get("bal_code")
     amount = data.get("bal_amount")
     if not code or amount is None or direction not in ("add", "sub"):
-        await message.answer("Ввод сброшен. Начните заново — /balance.", reply_markup=main_menu_kb())
+        await message.answer("Ввод сброшен. Начните заново — /balance.")
         return
     d = await get_dealer(code)
     if not d:
-        await message.answer("Дилер не найден.", reply_markup=main_menu_kb())
+        await message.answer("Дилер не найден.")
         return
     signed = amount if direction == "add" else -amount
     kind = "admin_add" if direction == "add" else "admin_sub"
     new_balance = await apply_balance_change(code, signed, kind, comment)
     if new_balance is None:
-        await message.answer("Не удалось изменить баланс.", reply_markup=main_menu_kb())
+        await message.answer("Не удалось изменить баланс.")
         return
     word = "начислил" if direction == "add" else "списал"
     if d.chat_id is not None:
@@ -2536,7 +2503,6 @@ async def bal_comment(message: Message, state: FSMContext, bot: Bot) -> None:
             pass
     await message.answer(
         f"✅ Готово. Дилеру «{d.title}» {word} ${amount:g}.\nНовый долг: ${new_balance:g}",
-        reply_markup=main_menu_kb(),
     )
     await message.answer(await balance_overview_text(), reply_markup=balance_menu_kb())
 
@@ -2553,7 +2519,6 @@ async def bal_price_start(cb: CallbackQuery, state: FSMContext) -> None:
     await cb.message.answer(
         f"Текущая цена за продление: ${price:g}\n"
         "Введите новую цену в $ (например 5). Отмена — /cancel",
-        reply_markup=main_menu_kb(),
     )
 
 
@@ -2561,11 +2526,11 @@ async def bal_price_start(cb: CallbackQuery, state: FSMContext) -> None:
 async def bal_price_set(message: Message, state: FSMContext) -> None:
     amount = _parse_amount(message.text or "")
     if amount is None:
-        await message.answer("Введите положительное число (например 5). Ещё раз или /cancel.", reply_markup=main_menu_kb())
+        await message.answer("Введите положительное число (например 5). Ещё раз или /cancel.")
         return
     await state.clear()
     await set_price(amount)
-    await message.answer(f"✅ Цена за продление установлена: ${amount:g}", reply_markup=main_menu_kb())
+    await message.answer(f"✅ Цена за продление установлена: ${amount:g}")
     await message.answer(await balance_overview_text(), reply_markup=balance_menu_kb())
 
 
@@ -2625,7 +2590,7 @@ async def on_pay(message: Message, state: FSMContext) -> None:
     if not ensure_allowed_user(message):
         return
     if is_dealer_mode():
-        await message.answer(ensure_admin_only(), reply_markup=main_menu_kb())
+        await message.answer(ensure_admin_only())
         return
     await state.clear()
     await message.answer(await pay_admin_text(), reply_markup=await pay_admin_kb())
@@ -2705,7 +2670,6 @@ async def pm_req_start(cb: CallbackQuery, state: FSMContext) -> None:
         f"Метод «{m.name}». Введите реквизиты (номер карты/кошелька, инструкции).\n"
         f"Текущие реквизиты:\n{cur}\n\n"
         "Отмена — /cancel",
-        reply_markup=main_menu_kb(),
     )
 
 
@@ -2713,23 +2677,23 @@ async def pm_req_start(cb: CallbackQuery, state: FSMContext) -> None:
 async def pm_req_save(message: Message, state: FSMContext) -> None:
     text = (message.text or "").strip()
     if not text:
-        await message.answer("Реквизиты не могут быть пустыми. Ещё раз или /cancel.", reply_markup=main_menu_kb())
+        await message.answer("Реквизиты не могут быть пустыми. Ещё раз или /cancel.")
         return
     data = await state.get_data()
     pm_id = data.get("pm_id")
     await state.clear()
     if not pm_id:
-        await message.answer("Ввод сброшен. Начните заново — /pay.", reply_markup=main_menu_kb())
+        await message.answer("Ввод сброшен. Начните заново — /pay.")
         return
     async with SessionLocal() as session:
         m = await session.get(PaymentMethod, int(pm_id))
         if not m:
-            await message.answer("Метод не найден.", reply_markup=main_menu_kb())
+            await message.answer("Метод не найден.")
             return
         m.requisites = text[:1024]
         name = m.name
         await session.commit()
-    await message.answer(f"✅ Реквизиты метода «{name}» обновлены.", reply_markup=main_menu_kb())
+    await message.answer(f"✅ Реквизиты метода «{name}» обновлены.")
     await message.answer(await pay_admin_text(), reply_markup=await pay_admin_kb())
 
 
@@ -2743,7 +2707,6 @@ async def pm_add_start(cb: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(PayAdminStates.waiting_method_name)
     await cb.message.answer(
         "Введите название нового метода оплаты (например: Каспи).\nОтмена — /cancel",
-        reply_markup=main_menu_kb(),
     )
 
 
@@ -2751,7 +2714,7 @@ async def pm_add_start(cb: CallbackQuery, state: FSMContext) -> None:
 async def pm_add_save(message: Message, state: FSMContext) -> None:
     name = (message.text or "").strip()
     if not name or len(name) > 64:
-        await message.answer("Название не должно быть пустым или длиннее 64 символов. Ещё раз или /cancel.", reply_markup=main_menu_kb())
+        await message.answer("Название не должно быть пустым или длиннее 64 символов. Ещё раз или /cancel.")
         return
     await state.clear()
     async with SessionLocal() as session:
@@ -2759,13 +2722,12 @@ async def pm_add_save(message: Message, state: FSMContext) -> None:
             select(PaymentMethod).where(PaymentMethod.name == name)
         )).scalars().first()
         if existing:
-            await message.answer(f"Метод «{name}» уже существует.", reply_markup=main_menu_kb())
+            await message.answer(f"Метод «{name}» уже существует.")
             return
         session.add(PaymentMethod(name=name, requisites="", active=True))
         await session.commit()
     await message.answer(
         f"✅ Метод «{name}» добавлен. Не забудьте задать ему реквизиты.",
-        reply_markup=main_menu_kb(),
     )
     await message.answer(await pay_admin_text(), reply_markup=await pay_admin_kb())
 
@@ -2783,12 +2745,11 @@ async def pay_confirm(cb: CallbackQuery, bot: Bot) -> None:
     async with SessionLocal() as session:
         pay = await session.get(Payment, pay_id)
         if not pay:
-            await cb.message.answer("Заявка на оплату не найдена.", reply_markup=main_menu_kb())
+            await cb.message.answer("Заявка на оплату не найдена.")
             return
         if pay.status != "pending":
             await cb.message.answer(
                 f"Заявка уже обработана (статус: {pay.status}).",
-                reply_markup=main_menu_kb(),
             )
             return
         pay.status = "confirmed"
@@ -2813,7 +2774,6 @@ async def pay_confirm(cb: CallbackQuery, bot: Bot) -> None:
     await cb.message.answer(
         f"✅ Оплата подтверждена.\nДилер: {d.title if d else dealer_code}\n"
         f"Метод: {method_full}, сумма: ${amount:g}\nНовый долг: {bal_show}",
-        reply_markup=main_menu_kb(),
     )
 
 
@@ -2830,12 +2790,11 @@ async def pay_reject(cb: CallbackQuery, bot: Bot) -> None:
     async with SessionLocal() as session:
         pay = await session.get(Payment, pay_id)
         if not pay:
-            await cb.message.answer("Заявка на оплату не найдена.", reply_markup=main_menu_kb())
+            await cb.message.answer("Заявка на оплату не найдена.")
             return
         if pay.status != "pending":
             await cb.message.answer(
                 f"Заявка уже обработана (статус: {pay.status}).",
-                reply_markup=main_menu_kb(),
             )
             return
         pay.status = "rejected"
@@ -2857,7 +2816,6 @@ async def pay_reject(cb: CallbackQuery, bot: Bot) -> None:
             pass
     await cb.message.answer(
         f"Оплата отклонена.\nДилер: {d.title if d else dealer_code}\nМетод: {method_full}, сумма: ${amount:g}",
-        reply_markup=main_menu_kb(),
     )
 
 
@@ -2949,7 +2907,6 @@ async def pm_rename_start(cb: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(PayAdminStates.waiting_method_rename)
     await cb.message.answer(
         f"Метод «{m.name}». Введите новое название (до 64 символов).\nОтмена — /cancel",
-        reply_markup=main_menu_kb(),
     )
 
 
@@ -2957,30 +2914,30 @@ async def pm_rename_start(cb: CallbackQuery, state: FSMContext) -> None:
 async def pm_rename_save(message: Message, state: FSMContext) -> None:
     name = (message.text or "").strip()
     if not name or len(name) > 64:
-        await message.answer("Название не должно быть пустым или длиннее 64 символов. Ещё раз или /cancel.", reply_markup=main_menu_kb())
+        await message.answer("Название не должно быть пустым или длиннее 64 символов. Ещё раз или /cancel.")
         return
     data = await state.get_data()
     pm_id = data.get("pm_id")
     if not pm_id:
         await state.clear()
-        await message.answer("Ввод сброшен. Начните заново — /pay.", reply_markup=main_menu_kb())
+        await message.answer("Ввод сброшен. Начните заново — /pay.")
         return
     async with SessionLocal() as session:
         existing = (await session.execute(
             select(PaymentMethod).where(PaymentMethod.name == name, PaymentMethod.id != int(pm_id))
         )).scalars().first()
         if existing:
-            await message.answer(f"Метод «{name}» уже существует. Выберите другое название или /cancel.", reply_markup=main_menu_kb())
+            await message.answer(f"Метод «{name}» уже существует. Выберите другое название или /cancel.")
             return
         m = await session.get(PaymentMethod, int(pm_id))
         if not m:
             await state.clear()
-            await message.answer("Метод не найден.", reply_markup=main_menu_kb())
+            await message.answer("Метод не найден.")
             return
         m.name = name
         await session.commit()
     await state.clear()
-    await message.answer(f"✅ Метод переименован: {name}", reply_markup=main_menu_kb())
+    await message.answer(f"✅ Метод переименован: {name}")
     m2 = await get_payment_method(int(pm_id))
     if m2:
         text, kb = await _method_card(m2)
@@ -3008,7 +2965,6 @@ async def pm_vadd_start(cb: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(PayAdminStates.waiting_variant_name)
     await cb.message.answer(
         f"Метод «{m.name}». Введите название нового вида оплаты (например: TRC-20, Сбербанк).\nОтмена — /cancel",
-        reply_markup=main_menu_kb(),
     )
 
 
@@ -3016,19 +2972,18 @@ async def pm_vadd_start(cb: CallbackQuery, state: FSMContext) -> None:
 async def pm_vadd_name_save(message: Message, state: FSMContext) -> None:
     name = (message.text or "").strip()
     if not name or len(name) > 64:
-        await message.answer("Название не должно быть пустым или длиннее 64 символов. Ещё раз или /cancel.", reply_markup=main_menu_kb())
+        await message.answer("Название не должно быть пустым или длиннее 64 символов. Ещё раз или /cancel.")
         return
     data = await state.get_data()
     pm_id = data.get("pm_id")
     if not pm_id:
         await state.clear()
-        await message.answer("Ввод сброшен. Начните заново — /pay.", reply_markup=main_menu_kb())
+        await message.answer("Ввод сброшен. Начните заново — /pay.")
         return
     await state.update_data(v_name=name)
     await state.set_state(PayAdminStates.waiting_variant_new_req)
     await message.answer(
         f"Вид «{name}». Введите реквизиты (номер карты/кошелька, инструкции).\nИли «-», чтобы пропустить.",
-        reply_markup=main_menu_kb(),
     )
 
 
@@ -3041,13 +2996,13 @@ async def pm_vadd_req_save(message: Message, state: FSMContext) -> None:
     name = data.get("v_name")
     await state.clear()
     if not pm_id or not name:
-        await message.answer("Ввод сброшен. Начните заново — /pay.", reply_markup=main_menu_kb())
+        await message.answer("Ввод сброшен. Начните заново — /pay.")
         return
     async with SessionLocal() as session:
         v = PaymentVariant(method_id=int(pm_id), name=name, requisites=req, active=True)
         session.add(v)
         await session.commit()
-    await message.answer(f"✅ Вид «{name}» добавлен.", reply_markup=main_menu_kb())
+    await message.answer(f"✅ Вид «{name}» добавлен.")
     m2 = await get_payment_method(int(pm_id))
     if m2:
         text, kb = await _method_card(m2)
@@ -3126,7 +3081,6 @@ async def pv_req_start(cb: CallbackQuery, state: FSMContext) -> None:
     await cb.message.answer(
         f"{name_path}. Введите реквизиты (номер карты/кошелька, инструкции).\n"
         f"Текущие реквизиты:\n{cur}\n\nОтмена — /cancel",
-        reply_markup=main_menu_kb(),
     )
 
 
@@ -3134,23 +3088,23 @@ async def pv_req_start(cb: CallbackQuery, state: FSMContext) -> None:
 async def pv_req_save(message: Message, state: FSMContext) -> None:
     text_in = (message.text or "").strip()
     if not text_in:
-        await message.answer("Реквизиты не могут быть пустыми. Ещё раз или /cancel.", reply_markup=main_menu_kb())
+        await message.answer("Реквизиты не могут быть пустыми. Ещё раз или /cancel.")
         return
     data = await state.get_data()
     v_id = data.get("v_id")
     await state.clear()
     if not v_id:
-        await message.answer("Ввод сброшен. Начните заново — /pay.", reply_markup=main_menu_kb())
+        await message.answer("Ввод сброшен. Начните заново — /pay.")
         return
     async with SessionLocal() as session:
         v = await session.get(PaymentVariant, int(v_id))
         if not v:
-            await message.answer("Вид не найден.", reply_markup=main_menu_kb())
+            await message.answer("Вид не найден.")
             return
         v.requisites = text_in[:1024]
         method_id = v.method_id
         await session.commit()
-    await message.answer("✅ Реквизиты обновлены.", reply_markup=main_menu_kb())
+    await message.answer("✅ Реквизиты обновлены.")
     v2 = await get_payment_variant(int(v_id))
     m = await get_payment_method(method_id)
     if v2 and m:
@@ -3177,7 +3131,6 @@ async def pv_rename_start(cb: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(PayAdminStates.waiting_variant_rename)
     await cb.message.answer(
         f"Вид «{v.name}». Введите новое название (до 64 символов).\nОтмена — /cancel",
-        reply_markup=main_menu_kb(),
     )
 
 
@@ -3185,23 +3138,23 @@ async def pv_rename_start(cb: CallbackQuery, state: FSMContext) -> None:
 async def pv_rename_save(message: Message, state: FSMContext) -> None:
     name = (message.text or "").strip()
     if not name or len(name) > 64:
-        await message.answer("Название не должно быть пустым или длиннее 64 символов. Ещё раз или /cancel.", reply_markup=main_menu_kb())
+        await message.answer("Название не должно быть пустым или длиннее 64 символов. Ещё раз или /cancel.")
         return
     data = await state.get_data()
     v_id = data.get("v_id")
     await state.clear()
     if not v_id:
-        await message.answer("Ввод сброшен. Начните заново — /pay.", reply_markup=main_menu_kb())
+        await message.answer("Ввод сброшен. Начните заново — /pay.")
         return
     async with SessionLocal() as session:
         v = await session.get(PaymentVariant, int(v_id))
         if not v:
-            await message.answer("Вид не найден.", reply_markup=main_menu_kb())
+            await message.answer("Вид не найден.")
             return
         v.name = name
         method_id = v.method_id
         await session.commit()
-    await message.answer(f"✅ Вид переименован: {name}", reply_markup=main_menu_kb())
+    await message.answer(f"✅ Вид переименован: {name}")
     v2 = await get_payment_variant(int(v_id))
     m = await get_payment_method(method_id)
     if v2 and m:
@@ -3256,7 +3209,6 @@ async def dealer_key_pick(cb: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(AdminKeyToDealerStates.waiting_userid)
     await cb.message.answer(
         f"Дилер: {d.title}\nШаг 1/3. Введите USERID клиента (число).\nОтмена — /cancel",
-        reply_markup=main_menu_kb(),
     )
 
 
@@ -3264,24 +3216,23 @@ async def dealer_key_pick(cb: CallbackQuery, state: FSMContext) -> None:
 async def dealer_key_userid(message: Message, state: FSMContext) -> None:
     text = (message.text or "").strip()
     if not text.isdigit():
-        await message.answer("USERID должен быть числом. Ещё раз или /cancel.", reply_markup=main_menu_kb())
+        await message.answer("USERID должен быть числом. Ещё раз или /cancel.")
         return
     await state.update_data(key_uid=text)
     await state.set_state(AdminKeyToDealerStates.waiting_username)
-    await message.answer("Шаг 2/3. Введите USERNAME клиента.", reply_markup=main_menu_kb())
+    await message.answer("Шаг 2/3. Введите USERNAME клиента.")
 
 
 @router.message(AdminKeyToDealerStates.waiting_username)
 async def dealer_key_username(message: Message, state: FSMContext) -> None:
     username = (message.text or "").strip()
     if not username or len(username) > 128:
-        await message.answer("USERNAME не должно быть пустым и длиннее 128 символов. Ещё раз или /cancel.", reply_markup=main_menu_kb())
+        await message.answer("USERNAME не должно быть пустым и длиннее 128 символов. Ещё раз или /cancel.")
         return
     await state.update_data(key_uname=username)
     await state.set_state(AdminKeyToDealerStates.waiting_keycode)
     await message.answer(
         "Шаг 3/3. Вставьте код ключа (любая длина).",
-        reply_markup=main_menu_kb(),
     )
 
 
@@ -3289,7 +3240,7 @@ async def dealer_key_username(message: Message, state: FSMContext) -> None:
 async def dealer_key_send(message: Message, state: FSMContext, bot: Bot) -> None:
     code_text = (message.text or "").strip()
     if not code_text:
-        await message.answer("Код ключа не может быть пустым. Ещё раз или /cancel.", reply_markup=main_menu_kb())
+        await message.answer("Код ключа не может быть пустым. Ещё раз или /cancel.")
         return
     data = await state.get_data()
     target_code = data.get("target_code")
@@ -3297,11 +3248,11 @@ async def dealer_key_send(message: Message, state: FSMContext, bot: Bot) -> None
     uname = data.get("key_uname")
     await state.clear()
     if not target_code or not uid or not uname:
-        await message.answer("Ввод сброшен. Начните заново через /dealers.", reply_markup=main_menu_kb())
+        await message.answer("Ввод сброшен. Начните заново через /dealers.")
         return
     d = await get_dealer(target_code)
     if not d or d.chat_id is None:
-        await message.answer("Дилер не найден или нет Telegram ID.", reply_markup=main_menu_kb())
+        await message.answer("Дилер не найден или нет Telegram ID.")
         return
     safe_uid = html.escape(uid)
     safe_uname = html.escape(uname)
@@ -3318,15 +3269,13 @@ async def dealer_key_send(message: Message, state: FSMContext, bot: Bot) -> None
         await message.answer(
             f"❌ Не удалось отправить дилеру «{d.title}». "
             "Возможно, он не нажимал Start у этого бота.",
-            reply_markup=main_menu_kb(),
         )
         return
     except Exception as e:
-        await message.answer(f"❌ Ошибка отправки: {e}", reply_markup=main_menu_kb())
+        await message.answer(f"❌ Ошибка отправки: {e}")
         return
     await message.answer(
         f"✅ Ключ отправлен дилеру «{d.title}» (USERID {uid}, USERNAME {uname}).",
-        reply_markup=main_menu_kb(),
     )
 
 
@@ -3346,12 +3295,12 @@ async def order_fulfill_start(cb: CallbackQuery, state: FSMContext) -> None:
     oid = cb.data.split(":", 1)[1]
     order = _pending_orders.get(oid)
     if not order:
-        await cb.message.answer("Заказ не найден или уже выполнен.", reply_markup=main_menu_kb())
+        await cb.message.answer("Заказ не найден или уже выполнен.")
         return
     idx = order["fulfilled"]
     names = order["names"]
     if idx >= len(names):
-        await cb.message.answer("Все ключи из этого заказа уже выполнены.", reply_markup=main_menu_kb())
+        await cb.message.answer("Все ключи из этого заказа уже выполнены.")
         return
     client_name = names[idx]
     total = len(names)
@@ -3361,7 +3310,6 @@ async def order_fulfill_start(cb: CallbackQuery, state: FSMContext) -> None:
     await cb.message.answer(
         f"🔑 Ключ {idx + 1}/{total} — клиент: {client_name}\n\n"
         f"Введите USERID:",
-        reply_markup=main_menu_kb(),
     )
 
 
@@ -3414,7 +3362,7 @@ async def oful_key_code(message: Message, state: FSMContext) -> None:
     order = _pending_orders.get(oid)
     if not order:
         await state.clear()
-        await message.answer("Заказ не найден.", reply_markup=main_menu_kb())
+        await message.answer("Заказ не найден.")
         return
     idx = data["key_index"]
     client_name = order["names"][idx]
@@ -3448,7 +3396,7 @@ async def oful_confirm(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     order = _pending_orders.get(oid)
     if not order:
         await state.clear()
-        await cb.message.answer("Заказ не найден.", reply_markup=main_menu_kb())
+        await cb.message.answer("Заказ не найден.")
         return
 
     idx = data["key_index"]
@@ -3507,7 +3455,6 @@ async def oful_confirm(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
         f"✅ Ключ {idx + 1}/{len(order['names'])} выполнен!\n"
         f"Клиент: {client_name}, USERID={uid}\n"
         f"Баланс дилера: {bal_str}",
-        reply_markup=main_menu_kb(),
     )
 
     # Если есть ещё ключи — предлагаем продолжить
@@ -3522,14 +3469,14 @@ async def oful_confirm(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
         )
     else:
         del _pending_orders[oid]
-        await cb.message.answer("🎉 Все ключи из заказа выполнены!", reply_markup=main_menu_kb())
+        await cb.message.answer("🎉 Все ключи из заказа выполнены!")
 
 
 @router.callback_query(F.data == "oful:cancel", OrderFulfillStates.waiting_confirm)
 async def oful_cancel(cb: CallbackQuery, state: FSMContext) -> None:
     await cb.answer()
     await state.clear()
-    await cb.message.answer("Отменено. Заказ остаётся в очереди.", reply_markup=main_menu_kb())
+    await cb.message.answer("Отменено. Заказ остаётся в очереди.")
 
 
 # ====== Бэкап базы данных (только админ) ======
@@ -3556,7 +3503,7 @@ async def backup_home(message: Message, state: FSMContext) -> None:
     if not ensure_allowed_user(message):
         return
     if is_dealer_mode():
-        await message.answer(ensure_admin_only(), reply_markup=main_menu_kb())
+        await message.answer(ensure_admin_only())
         return
     await state.clear()
     await message.answer("💾 Бэкап базы данных\n\nВыберите действие:", reply_markup=backup_menu_kb())
@@ -3663,7 +3610,6 @@ async def backup_restore_start(cb: CallbackQuery, state: FSMContext) -> None:
         "Отправьте ZIP-архив бэкапа.\n"
         "⚠️ Текущая база данных будет заменена!\n\n"
         "Отмена — /cancel",
-        reply_markup=main_menu_kb(),
     )
 
 
@@ -3673,7 +3619,6 @@ async def backup_restore_got_file(message: Message, state: FSMContext, bot: Bot)
     if not doc.file_name or not doc.file_name.lower().endswith(".zip"):
         await message.answer(
             "Отправьте ZIP-архив (.zip). Попробуйте ещё раз или /cancel.",
-            reply_markup=main_menu_kb(),
         )
         return
 
@@ -3722,7 +3667,6 @@ async def backup_restore_got_file(message: Message, state: FSMContext, bot: Bot)
 async def backup_restore_not_file(message: Message) -> None:
     await message.answer(
         "Отправьте файл (ZIP-архив). Или /cancel для отмены.",
-        reply_markup=main_menu_kb(),
     )
 
 
@@ -3734,7 +3678,7 @@ async def backup_restore_cancel(cb: CallbackQuery, state: FSMContext) -> None:
     if tmp_zip_str:
         Path(tmp_zip_str).unlink(missing_ok=True)
     await state.clear()
-    await cb.message.answer("Восстановление отменено.", reply_markup=main_menu_kb())
+    await cb.message.answer("Восстановление отменено.")
 
 
 @router.callback_query(F.data == "cfb:ok", BackupStates.waiting_restore_confirm)
@@ -3779,13 +3723,12 @@ async def backup_restore_confirm(cb: CallbackQuery, state: FSMContext) -> None:
             "⚠️ Перезапустите бота для полного применения:\n"
             "<code>cd /opt/xmplus && docker compose restart</code>",
             parse_mode="HTML",
-            reply_markup=main_menu_kb(),
         )
     except Exception as e:
         if tmp_zip:
             tmp_zip.unlink(missing_ok=True)
         await state.clear()
-        await cb.message.answer(f"❌ Ошибка восстановления: {e}", reply_markup=main_menu_kb())
+        await cb.message.answer(f"❌ Ошибка восстановления: {e}")
 
 
 # --- Список бэкапов ---
@@ -4061,7 +4004,6 @@ async def rt_add_note(message: Message, state: FSMContext) -> None:
         f"Клиент: {client_name}\n"
         f"DUE: {fmt_dt_human(due)}\n"
         + (f"Заметка: {note}" if note else ""),
-        reply_markup=main_menu_kb(),
     )
 
 
@@ -4188,7 +4130,7 @@ async def rt_renew_due(message: Message, state: FSMContext) -> None:
     async with SessionLocal() as session:
         it = (await session.execute(select(RouterItem).where(RouterItem.id == item_id))).scalars().first()
         if not it:
-            await message.answer("Запись не найдена.", reply_markup=main_menu_kb())
+            await message.answer("Запись не найдена.")
             return
         old_due = fmt_dt_human(it.due_date)
         it.due_date = dt
@@ -4200,7 +4142,6 @@ async def rt_renew_due(message: Message, state: FSMContext) -> None:
         f"Клиент: {it.client_name}\n"
         f"Было: {old_due}\n"
         f"Стало: {fmt_dt_human(dt)}",
-        reply_markup=main_menu_kb(),
     )
 
 
@@ -4359,12 +4300,12 @@ async def rt_edit_field_save(message: Message, state: FSMContext) -> None:
     async with SessionLocal() as session:
         it = (await session.execute(select(RouterItem).where(RouterItem.id == item_id))).scalars().first()
         if not it:
-            await message.answer("Запись не найдена.", reply_markup=main_menu_kb())
+            await message.answer("Запись не найдена.")
             return
         if field == "due_date":
             dt = parse_datetime_human(text)
             if dt is None:
-                await message.answer("Не удалось разобрать дату. Попробуйте ещё раз через ✒️ Изменить.", reply_markup=main_menu_kb())
+                await message.answer("Не удалось разобрать дату. Попробуйте ещё раз через ✒️ Изменить.")
                 return
             it.due_date = dt
             it.notified_count = 0
