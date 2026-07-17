@@ -176,12 +176,12 @@ def main_menu_kb() -> ReplyKeyboardMarkup:
         selective=True,
     )
 
-def confirm_kb() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="✅ Подтвердить"), KeyboardButton(text="❌ Отмена")]],
-        resize_keyboard=True,
-        selective=True,
-    )
+def confirm_kb(prefix: str, show_edit: bool = True) -> InlineKeyboardMarkup:
+    buttons = [InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"{prefix}:ok")]
+    if show_edit:
+        buttons.append(InlineKeyboardButton(text="✏️ Изменить", callback_data=f"{prefix}:edit"))
+    buttons.append(InlineKeyboardButton(text="❌ Отмена", callback_data=f"{prefix}:cancel"))
+    return InlineKeyboardMarkup(inline_keyboard=[buttons])
 
 def choose_by_due_kb(prefix: str, items: list[Item], extra_row: list[InlineKeyboardButton] | None = None) -> InlineKeyboardMarkup:
     buttons = []
@@ -490,10 +490,7 @@ def add_months(dt: datetime, months: int = 1) -> datetime:
     d = min(dt.day, last_day)
     return dt.replace(year=y, month=m, day=d)
 
-def confirm_with_edit_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✏️ Изменить вручную", callback_data="renew:edit")],
-    ])
+
 
 @router.message(Command("renew"))
 @router.message(F.text.in_(["/renew", "🔄 Продлить"]))
@@ -599,25 +596,10 @@ async def renew_prefill(cb: CallbackQuery, state: FSMContext) -> None:
         f"USERNAME: {it.username}\n"
         f"Было: {fmt_dt_human(base_dt)}\n"
         f"Станет: {fmt_dt_human(new_dt)}",
-        reply_markup=confirm_kb(),
+        reply_markup=confirm_kb("cfr"),
     )
-    # Кнопка для возврата к ручному вводу (если хотите поправить дату)
-    await cb.message.answer("Хотите поправить дату вручную? Нажмите кнопку ниже и введите новую дату:", reply_markup=confirm_with_edit_kb())
 
-@router.callback_query(F.data == "renew:edit")
-async def renew_edit(cb: CallbackQuery, state: FSMContext) -> None:
-    await cb.answer()
-    data = await state.get_data()
-    suggested = data.get("new_due")
-    await state.set_state(RenewStates.waiting_new_due)
-    if suggested:
-        await cb.message.answer(
-            "Отправьте новую дату в формате:\nYYYY-MM-DD HH:MM:SS\n"
-            f"Подсказка: {suggested}",
-            reply_markup=main_menu_kb(),
-        )
-    else:
-        await cb.message.answer("Отправьте новую дату в формате:\nYYYY-MM-DD HH:MM:SS", reply_markup=main_menu_kb())
+
 
 @router.message(RenewStates.waiting_new_due)
 async def renew_get_new_due(message: Message, state: FSMContext) -> None:
@@ -636,17 +618,32 @@ async def renew_get_new_due(message: Message, state: FSMContext) -> None:
         f"USERNAME: {data.get('username')}\n"
         f"Было: {data.get('old_due')}\n"
         f"Станет: {new_due}",
-        reply_markup=confirm_kb(),
+        reply_markup=confirm_kb("cfr"),
     )
-    await message.answer("Если хотите скорректировать ещё раз, нажмите ниже:", reply_markup=confirm_with_edit_kb())
 
-@router.message(RenewStates.waiting_confirm)
-async def renew_confirm(message: Message, state: FSMContext, bot: Bot) -> None:
-    text = (message.text or "").strip().lower()
-    if text not in ("✅ подтвердить", "подтвердить", "да", "ok", "ок"):
-        await state.clear()
-        await message.answer("Отменено.", reply_markup=main_menu_kb())
-        return
+@router.callback_query(F.data == "cfr:edit")
+async def renew_confirm_edit(cb: CallbackQuery, state: FSMContext) -> None:
+    await cb.answer()
+    data = await state.get_data()
+    suggested = data.get("new_due")
+    await state.set_state(RenewStates.waiting_new_due)
+    hint = f"\nПодсказка: {suggested}" if suggested else ""
+    await cb.message.answer(
+        f"Отправьте новую дату в формате:\nYYYY-MM-DD HH:MM:SS{hint}",
+        reply_markup=main_menu_kb(),
+    )
+
+
+@router.callback_query(F.data == "cfr:cancel")
+async def renew_confirm_cancel(cb: CallbackQuery, state: FSMContext) -> None:
+    await cb.answer()
+    await state.clear()
+    await cb.message.answer("Отменено.", reply_markup=main_menu_kb())
+
+
+@router.callback_query(F.data == "cfr:ok", RenewStates.waiting_confirm)
+async def renew_confirm(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    await cb.answer()
     data = await state.get_data()
     item_id = int(data["item_id"])
     new_due_str = data["new_due"]
@@ -657,12 +654,12 @@ async def renew_confirm(message: Message, state: FSMContext, bot: Bot) -> None:
         item = await session.get(Item, item_id)
         if not item:
             await state.clear()
-            await message.answer("Запись не найдена.", reply_markup=main_menu_kb())
+            await cb.message.answer("Запись не найдена.", reply_markup=main_menu_kb())
             return
         dt = parse_datetime_human(new_due_str)
         if not dt:
             await state.clear()
-            await message.answer("Ошибка при парсинге даты. Операция отменена.", reply_markup=main_menu_kb())
+            await cb.message.answer("Ошибка при парсинге даты. Операция отменена.", reply_markup=main_menu_kb())
             return
         item.due_date = dt
         item.notified_count = 0
@@ -672,7 +669,7 @@ async def renew_confirm(message: Message, state: FSMContext, bot: Bot) -> None:
         item_username = item.username
         await session.commit()
     await state.clear()
-    await message.answer(
+    await cb.message.answer(
         f"✅ Продлено: USERID={data['user_id']}, USERNAME={data['username']}\nНовая дата DUE={new_due_str}",
         reply_markup=main_menu_kb(),
     )
@@ -739,7 +736,7 @@ async def delete_by_userid(message: Message, state: FSMContext) -> None:
         preview = f"USERID={it.user_id}, USERNAME={it.username}, DUE={fmt_dt_human(it.due_date)}"
         await state.update_data(action="one", item_id=it.id, user_id=it.user_id)
         await state.set_state(DeleteStates.waiting_confirm)
-        await message.answer("Удалить запись?\n" + preview, reply_markup=confirm_kb())
+        await message.answer("Удалить запись?\n" + preview, reply_markup=confirm_kb("cfd", show_edit=False))
         return
     extra = [InlineKeyboardButton(text="🗑 Удалить все записи этого USERID", callback_data=f"delete:all:{uid}")]
     kb = choose_by_due_kb("delete", items, extra_row=extra)
@@ -760,7 +757,7 @@ async def delete_choose_one(cb: CallbackQuery, state: FSMContext) -> None:
     preview = f"USERID={it.user_id}, USERNAME={it.username}, DUE={fmt_dt_human(it.due_date)}"
     await state.update_data(action="one", item_id=it.id, user_id=it.user_id)
     await state.set_state(DeleteStates.waiting_confirm)
-    await cb.message.answer("Удалить запись?\n" + preview, reply_markup=confirm_kb())
+    await cb.message.answer("Удалить запись?\n" + preview, reply_markup=confirm_kb("cfd", show_edit=False))
 
 @router.callback_query(F.data.startswith("delete:all:"))
 async def delete_choose_all(cb: CallbackQuery, state: FSMContext) -> None:
@@ -771,15 +768,18 @@ async def delete_choose_all(cb: CallbackQuery, state: FSMContext) -> None:
         return
     await state.update_data(action="all", user_id=uid)
     await state.set_state(DeleteStates.waiting_confirm)
-    await cb.message.answer(f"Удалить ВСЕ записи для USERID={uid}?", reply_markup=confirm_kb())
+    await cb.message.answer(f"Удалить ВСЕ записи для USERID={uid}?", reply_markup=confirm_kb("cfd", show_edit=False))
 
-@router.message(DeleteStates.waiting_confirm)
-async def delete_confirm(message: Message, state: FSMContext) -> None:
-    text = (message.text or "").strip().lower()
-    if text not in ("✅ подтвердить", "подтвердить", "да", "ok", "ок"):
-        await state.clear()
-        await message.answer("Отменено.", reply_markup=main_menu_kb())
-        return
+@router.callback_query(F.data == "cfd:cancel")
+async def delete_confirm_cancel(cb: CallbackQuery, state: FSMContext) -> None:
+    await cb.answer()
+    await state.clear()
+    await cb.message.answer("Отменено.", reply_markup=main_menu_kb())
+
+
+@router.callback_query(F.data == "cfd:ok", DeleteStates.waiting_confirm)
+async def delete_confirm(cb: CallbackQuery, state: FSMContext) -> None:
+    await cb.answer()
     data = await state.get_data()
     async with SessionLocal() as session:
         if data.get("action") == "one":
@@ -791,7 +791,7 @@ async def delete_confirm(message: Message, state: FSMContext) -> None:
             await session.commit()
             msg = f"🗑️ Удалены все записи для USERID={data['user_id']}"
     await state.clear()
-    await message.answer(msg, reply_markup=main_menu_kb())
+    await cb.message.answer(msg, reply_markup=main_menu_kb())
 
 @router.callback_query(F.data == "list:export_csv")
 async def list_export_csv(cb: CallbackQuery) -> None:
@@ -3706,7 +3706,7 @@ async def backup_restore_got_file(message: Message, state: FSMContext, bot: Bot)
             f"Содержимое: {contents}\n\n"
             "⚠️ Текущая база данных будет заменена!\n"
             "Подтвердите восстановление:",
-            reply_markup=confirm_kb(),
+            reply_markup=confirm_kb("cfb", show_edit=False),
         )
     except zipfile.BadZipFile:
         Path("./data/_restore_tmp.zip").unlink(missing_ok=True)
@@ -3726,23 +3726,27 @@ async def backup_restore_not_file(message: Message) -> None:
     )
 
 
-@router.message(BackupStates.waiting_restore_confirm)
-async def backup_restore_confirm(message: Message, state: FSMContext) -> None:
-    text = (message.text or "").strip().lower()
+@router.callback_query(F.data == "cfb:cancel")
+async def backup_restore_cancel(cb: CallbackQuery, state: FSMContext) -> None:
+    await cb.answer()
+    data = await state.get_data()
+    tmp_zip_str = data.get("restore_zip", "")
+    if tmp_zip_str:
+        Path(tmp_zip_str).unlink(missing_ok=True)
+    await state.clear()
+    await cb.message.answer("Восстановление отменено.", reply_markup=main_menu_kb())
+
+
+@router.callback_query(F.data == "cfb:ok", BackupStates.waiting_restore_confirm)
+async def backup_restore_confirm(cb: CallbackQuery, state: FSMContext) -> None:
+    await cb.answer()
     data = await state.get_data()
     tmp_zip_str = data.get("restore_zip", "")
     tmp_zip = Path(tmp_zip_str) if tmp_zip_str else None
 
-    if text not in ("✅ подтвердить", "подтвердить", "да", "ok", "ок"):
-        if tmp_zip:
-            tmp_zip.unlink(missing_ok=True)
-        await state.clear()
-        await message.answer("Восстановление отменено.", reply_markup=main_menu_kb())
-        return
-
     if not tmp_zip or not tmp_zip.exists():
         await state.clear()
-        await message.answer(
+        await cb.message.answer(
             "❌ Временный файл не найден. Начните заново.",
             reply_markup=backup_menu_kb(),
         )
@@ -3769,7 +3773,7 @@ async def backup_restore_confirm(message: Message, state: FSMContext) -> None:
 
         tmp_zip.unlink(missing_ok=True)
         await state.clear()
-        await message.answer(
+        await cb.message.answer(
             "✅ База данных восстановлена!\n"
             "Старая база сохранена как резерв.\n\n"
             "⚠️ Перезапустите бота для полного применения:\n"
@@ -3781,7 +3785,7 @@ async def backup_restore_confirm(message: Message, state: FSMContext) -> None:
         if tmp_zip:
             tmp_zip.unlink(missing_ok=True)
         await state.clear()
-        await message.answer(f"❌ Ошибка восстановления: {e}", reply_markup=main_menu_kb())
+        await cb.message.answer(f"❌ Ошибка восстановления: {e}", reply_markup=main_menu_kb())
 
 
 # --- Список бэкапов ---
