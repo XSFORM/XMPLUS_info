@@ -298,3 +298,26 @@ async def apply_balance_change(dealer_code: str, amount: float, kind: str, comme
         new_balance = d.balance
         await session.commit()
     return new_balance
+
+
+MAIN_CODE = "main"
+
+
+async def list_dealers() -> list[Dealer]:
+    """Все дилеры из БД (без main), отсортированы по названию."""
+    async with SessionLocal() as session:
+        return (
+            await session.execute(select(Dealer).order_by(Dealer.title.asc()))
+        ).scalars().all()
+
+
+async def get_dealer(code: str) -> "Dealer | None":
+    """Дилер по коду; None для пустого или несуществующего кода."""
+    code = (code or "").strip().lower()
+    if not code:
+        return None
+    async with SessionLocal() as session:
+        return (
+            await session.execute(select(Dealer).where(Dealer.code == code))
+        ).scalars().first()
+

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import logging, csv, io, html
+import logging, csv, io, html, re
 from typing import List
 
 from aiogram import Router, Bot, F
@@ -11,7 +11,7 @@ from aiogram.types import (
 from aiogram.fsm.context import FSMContext
 from sqlalchemy import select, delete
 
-from app.db import SessionLocal, Item, Dealer
+from app.db import SessionLocal, Item, Dealer, MAIN_CODE, list_dealers, get_dealer
 from app.config import settings
 from app.states import DealerAssignStates, AddDealerStates, MsgDealerStates, BroadcastStates
 from app.keyboards import main_menu_kb
@@ -26,30 +26,10 @@ router = Router()
 # ==== Раздел "Диллеры" (только админ) ====
 
 # Спец-код и название для записей без дилера
-MAIN_CODE = "main"
 MAIN_TITLE = "Без дилера"
 
 # Допустимый код дилера: латиница/цифры/подчёркивание, 2-32 символа
 DEALER_CODE_RE = re.compile(r"^[a-z0-9_]{2,32}$")
-
-
-async def list_dealers() -> list[Dealer]:
-    """Все дилеры из БД (без main), отсортированы по названию."""
-    async with SessionLocal() as session:
-        return (
-            await session.execute(select(Dealer).order_by(Dealer.title.asc()))
-        ).scalars().all()
-
-
-async def get_dealer(code: str) -> Dealer | None:
-    """Дилер по коду; None для пустого или несуществующего кода."""
-    code = (code or "").strip().lower()
-    if not code:
-        return None
-    async with SessionLocal() as session:
-        return (
-            await session.execute(select(Dealer).where(Dealer.code == code))
-        ).scalars().first()
 
 
 async def dealers_menu_kb() -> InlineKeyboardMarkup:

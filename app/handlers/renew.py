@@ -9,13 +9,13 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKe
 from aiogram.fsm.context import FSMContext
 from sqlalchemy import select, delete
 
-from app.db import SessionLocal, Item, Dealer, get_price, apply_balance_change
+from app.db import SessionLocal, Item, Dealer, get_price, apply_balance_change, MAIN_CODE, get_dealer
 from app.config import settings
 from app.states import RenewStates, DeleteStates
 from app.keyboards import confirm_kb, choose_by_due_kb, main_menu_kb
 from app.utils import parse_datetime_human, fmt_dt_human, now_tz, to_tz, tz_offset_str
 from app.bot import _notify_fail
-from app.handlers.dealers import MAIN_CODE, get_dealer
+
 
 log = logging.getLogger(__name__)
 

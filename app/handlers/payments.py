@@ -20,7 +20,8 @@ from app.keyboards import main_menu_kb
 from app.utils import fmt_dt_human, now_tz, to_tz
 from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
 from app.bot import _notify_fail
-from app.handlers.dealers import list_dealers, get_dealer, dealers_menu_kb
+from app.db import list_dealers, get_dealer
+from app.handlers.dealers import dealers_menu_kb
 
 log = logging.getLogger(__name__)
 
