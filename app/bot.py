@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from datetime import datetime, timezone, timedelta
 import csv, io, html, os, re, calendar, zipfile, shutil
 from pathlib import Path
@@ -53,6 +55,23 @@ def _next_order_id() -> str:
     global _order_counter
     _order_counter += 1
     return str(_order_counter)
+
+log = logging.getLogger(__name__)
+
+
+async def _notify_fail(bot: Bot, dest_name: str, err: Exception) -> None:
+    """Логировать ошибку отправки и уведомить админа."""
+    log.warning("send_message to %s failed: %s", dest_name, err)
+    owner = int(settings.OWNER_CHAT_ID) if settings.OWNER_CHAT_ID else None
+    if owner:
+        try:
+            await bot.send_message(
+                owner,
+                f"\u26a0\ufe0f \u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0442\u043f\u0440\u0430\u0432\u0438\u0442\u044c \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435: {dest_name}\n\u041f\u0440\u0438\u0447\u0438\u043d\u0430: {err}",
+            )
+        except Exception:
+            pass
+
 
 # Команды меню в зависимости от режима
 BOT_COMMANDS_ADMIN = [
@@ -680,8 +699,8 @@ async def renew_confirm(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
                     f"Новая дата отключения: {new_due_str}"
                     + charge_line,
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                await _notify_fail(bot, f"дилер {d.title}", e)
 
 # ==== Удаление — только админ ====
 
@@ -1912,8 +1931,8 @@ async def dealer_order_collect_name(message: Message, state: FSMContext, bot: Bo
         ])
         try:
             await bot.send_message(owner_chat, admin_text, reply_markup=kb)
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning("Failed to send order to admin: %s", e)
     await message.answer(
         f"✅ Запрос на {total} ключей отправлен администратору.\n"
         f"Клиенты:\n{names_list}\n\nОжидайте.",
@@ -2046,8 +2065,10 @@ async def dealer_renew_comment(message: Message, state: FSMContext, bot: Bot) ->
         ]])
         try:
             await bot.send_message(owner_chat, admin_text, reply_markup=kb)
-        except Exception:
-            pass
+        except Exception as e:
+
+            log.warning("Failed to send renew request to admin: %s", e)
+
     await message.answer(
         "✅ Запрос на продление отправлен администратору. Ожидайте подтверждения.",
     )
@@ -2247,8 +2268,10 @@ async def dealer_pay_amount(message: Message, state: FSMContext, bot: Bot) -> No
         ]])
         try:
             await bot.send_message(owner_chat, admin_text, reply_markup=kb)
-        except Exception:
-            pass
+        except Exception as e:
+
+            log.warning("Failed to send payment request to admin: %s", e)
+
     await message.answer(
         f"✅ Заявка на оплату отправлена администратору.\n"
         f"Метод: {method} → {variant or '—'}\nСумма: ${amount:g}\n"
@@ -2330,8 +2353,10 @@ async def renew_request_reject(cb: CallbackQuery, bot: Bot) -> None:
                 "❌ Запрос на продление отклонён администратором.\n"
                 f"Клиент: USERID={user_id}, USERNAME={username}",
             )
-        except Exception:
-            pass
+        except Exception as e:
+
+            await _notify_fail(bot, f"дилер {d.title}", e)
+
     await cb.message.answer(
         f"Запрос отклонён. USERID={user_id}, USERNAME={username}.",
     )
@@ -2494,8 +2519,8 @@ async def bal_comment(message: Message, state: FSMContext, bot: Bot) -> None:
         dealer_text += f"Ваш долг: ${new_balance:g}"
         try:
             await bot.send_message(d.chat_id, dealer_text)
-        except Exception:
-            pass
+        except Exception as e:
+            await _notify_fail(bot, f"дилер {d.title}", e)
     await message.answer(
         f"✅ Готово. Дилеру «{d.title}» {word} ${amount:g}.\nНовый долг: ${new_balance:g}",
     )
@@ -2763,8 +2788,10 @@ async def pay_confirm(cb: CallbackQuery, bot: Bot) -> None:
                 d.chat_id,
                 f"✅ Оплата подтверждена.\nМетод: {method_full}\nСумма: ${amount:g}{bal_txt}",
             )
-        except Exception:
-            pass
+        except Exception as e:
+
+            await _notify_fail(bot, f"дилер {dealer_code}", e)
+
     bal_show = f"${new_balance:g}" if new_balance is not None else "?"
     await cb.message.answer(
         f"✅ Оплата подтверждена.\nДилер: {d.title if d else dealer_code}\n"
@@ -2807,8 +2834,10 @@ async def pay_reject(cb: CallbackQuery, bot: Bot) -> None:
                 f"❌ Оплата не подтверждена.\nМетод: {method_full}, сумма: ${amount:g}.\n"
                 "Свяжитесь с администратором.",
             )
-        except Exception:
-            pass
+        except Exception as e:
+
+            await _notify_fail(bot, f"дилер {dealer_code}", e)
+
     await cb.message.answer(
         f"Оплата отклонена.\nДилер: {d.title if d else dealer_code}\nМетод: {method_full}, сумма: ${amount:g}",
     )

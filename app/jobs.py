@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import timedelta
 
 from aiogram import Bot
@@ -8,6 +9,8 @@ from sqlalchemy import select
 from app.config import settings
 from app.db import SessionLocal, Item, RouterItem, Dealer
 from app.utils import now_tz, fmt_dt_human, tz_offset_str, to_tz
+
+log = logging.getLogger(__name__)
 
 
 async def check_expiries(bot: Bot) -> None:
@@ -66,8 +69,14 @@ async def check_expiries(bot: Bot) -> None:
                 )
                 try:
                     await bot.send_message(target_chat, text)
-                except Exception:
-                    pass
+                except Exception as e:
+                    dealer_name = it.dealer if it.dealer != "main" else "admin"
+                    log.warning("Notify failed (pre) for USERID=%s to %s: %s", it.user_id, dealer_name, e)
+                    if owner_chat and target_chat != owner_chat:
+                        try:
+                            await bot.send_message(owner_chat, f"\u26a0\ufe0f \u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0443\u0432\u0435\u0434\u043e\u043c\u0438\u0442\u044c {dealer_name} \u043e USERID={it.user_id}: {e}")
+                        except Exception:
+                            pass
                 else:
                     it.notified_count = 1
                     it.last_notified_at = now
@@ -85,8 +94,14 @@ async def check_expiries(bot: Bot) -> None:
                 )
                 try:
                     await bot.send_message(target_chat, text)
-                except Exception:
-                    pass
+                except Exception as e:
+                    dealer_name = it.dealer if it.dealer != "main" else "admin"
+                    log.warning("Notify failed (overdue) for USERID=%s to %s: %s", it.user_id, dealer_name, e)
+                    if owner_chat and target_chat != owner_chat:
+                        try:
+                            await bot.send_message(owner_chat, f"\u26a0\ufe0f \u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0443\u0432\u0435\u0434\u043e\u043c\u0438\u0442\u044c {dealer_name} \u043e \u043f\u0440\u043e\u0441\u0440\u043e\u0447\u043a\u0435 USERID={it.user_id}: {e}")
+                        except Exception:
+                            pass
                 else:
                     it.notified_count = settings.MAX_NOTIFICATIONS
                     it.last_notified_at = now
@@ -117,8 +132,8 @@ async def check_expiries(bot: Bot) -> None:
                 )
                 try:
                     await bot.send_message(owner_chat, text)
-                except Exception:
-                    pass
+                except Exception as e:
+                    log.warning("Router notify failed (pre) for %s: %s", rt.client_name, e)
                 else:
                     rt.notified_count = 1
                     rt.last_notified_at = now
@@ -134,8 +149,8 @@ async def check_expiries(bot: Bot) -> None:
                 )
                 try:
                     await bot.send_message(owner_chat, text)
-                except Exception:
-                    pass
+                except Exception as e:
+                    log.warning("Router notify failed (overdue) for %s: %s", rt.client_name, e)
                 else:
                     rt.notified_count = settings.MAX_NOTIFICATIONS
                     rt.last_notified_at = now
