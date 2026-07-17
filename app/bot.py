@@ -1636,7 +1636,8 @@ def dealer_user_menu_kb() -> ReplyKeyboardMarkup:
 
 @dealer_router.message(CommandStart())
 @dealer_router.message(F.text == "/start")
-async def dealer_on_start(message: Message) -> None:
+async def dealer_on_start(message: Message, state: FSMContext) -> None:
+    await state.clear()
     d = await dealer_by_chat(message.from_user.id)
     name = d.title if d else "дилер"
     cmds = ", ".join(f"/{c.command}" for c in BOT_COMMANDS_DEALER if c.command not in ("start", "help"))
@@ -1649,14 +1650,16 @@ async def dealer_on_start(message: Message) -> None:
 
 @dealer_router.message(Command("help"))
 @dealer_router.message(F.text == "/help")
-async def dealer_on_help(message: Message) -> None:
+async def dealer_on_help(message: Message, state: FSMContext) -> None:
+    await state.clear()
     text = "Доступные команды:\n" + "\n".join(f"/{c.command} — {c.description}" for c in BOT_COMMANDS_DEALER)
     await message.answer(text, reply_markup=dealer_user_menu_kb())
 
 
 @dealer_router.message(Command("list"))
 @dealer_router.message(F.text.in_(["/list", "📋 Список"]))
-async def dealer_on_list(message: Message) -> None:
+async def dealer_on_list(message: Message, state: FSMContext) -> None:
+    await state.clear()
     d = await dealer_by_chat(message.from_user.id)
     if not d:
         return
@@ -1676,7 +1679,8 @@ async def dealer_on_list(message: Message) -> None:
 
 @dealer_router.message(Command("disabled"))
 @dealer_router.message(F.text.in_(["/disabled", "⛔ Отключённые"]))
-async def dealer_on_disabled(message: Message) -> None:
+async def dealer_on_disabled(message: Message, state: FSMContext) -> None:
+    await state.clear()
     d = await dealer_by_chat(message.from_user.id)
     if not d:
         return
@@ -1698,7 +1702,8 @@ async def dealer_on_disabled(message: Message) -> None:
 
 @dealer_router.message(Command("next"))
 @dealer_router.message(F.text.in_(["/next", "⏰ Ближайшие"]))
-async def dealer_on_next(message: Message) -> None:
+async def dealer_on_next(message: Message, state: FSMContext) -> None:
+    await state.clear()
     d = await dealer_by_chat(message.from_user.id)
     if not d:
         return
@@ -1721,7 +1726,8 @@ async def dealer_on_next(message: Message) -> None:
 
 @dealer_router.message(Command("status"))
 @dealer_router.message(F.text.in_(["/status", "📊 Статус"]))
-async def dealer_on_status(message: Message) -> None:
+async def dealer_on_status(message: Message, state: FSMContext) -> None:
+    await state.clear()
     d = await dealer_by_chat(message.from_user.id)
     if not d:
         return
@@ -1858,7 +1864,8 @@ class DealerOrderStates(StatesGroup):
 
 @dealer_router.message(Command("order"))
 @dealer_router.message(F.text.in_(["/order", "➕ Добавить"]))
-async def dealer_order_start(message: Message) -> None:
+async def dealer_order_start(message: Message, state: FSMContext) -> None:
+    await state.clear()
     d = await dealer_by_chat(message.from_user.id)
     if not d:
         return
@@ -2094,7 +2101,8 @@ def _fmt_txn(t) -> str:
 
 @dealer_router.message(Command("balance"))
 @dealer_router.message(F.text.in_(["/balance", "💰 Баланс"]))
-async def dealer_on_balance(message: Message) -> None:
+async def dealer_on_balance(message: Message, state: FSMContext) -> None:
+    await state.clear()
     d = await dealer_by_chat(message.from_user.id)
     if not d:
         return
@@ -2139,7 +2147,8 @@ async def _dealer_show_methods(target, d: Dealer) -> None:
 
 @dealer_router.message(Command("pay"))
 @dealer_router.message(F.text.in_(["/pay", "💳 Оплата"]))
-async def dealer_on_pay(message: Message) -> None:
+async def dealer_on_pay(message: Message, state: FSMContext) -> None:
+    await state.clear()
     d = await dealer_by_chat(message.from_user.id)
     if not d:
         return
