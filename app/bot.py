@@ -164,7 +164,7 @@ def main_menu_kb() -> ReplyKeyboardMarkup:
             [KeyboardButton(text="➕ Добавить"), KeyboardButton(text="🔄 Продлить"), KeyboardButton(text="🗑 Удалить")],
             [KeyboardButton(text="📋 Список"), KeyboardButton(text="⏰ Ближайшие"), KeyboardButton(text="⛔ Отключённые")],
             [KeyboardButton(text="✏️ Редактор"), KeyboardButton(text="👥 Дилеры"), KeyboardButton(text="💰 Баланс")],
-            [KeyboardButton(text="💳 Оплата"), KeyboardButton(text="❌ Отмена")],
+            [KeyboardButton(text="💳 Оплата"), KeyboardButton(text="📡 Роутеры"), KeyboardButton(text="❌ Отмена")],
         ],
         resize_keyboard=True,
         input_field_placeholder="Выберите команду…",
