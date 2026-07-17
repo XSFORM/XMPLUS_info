@@ -198,6 +198,16 @@ dealer_router.callback_query.filter(IsDealer())
 guest_router.message.filter(IsGuest())
 guest_router.callback_query.filter(IsGuest())
 
+# Sub-router: admin-mode-only handlers (not registered in dealer mode)
+_admin = Router()
+if not is_dealer_mode():
+    router.include_router(_admin)
+else:
+    # In dealer mode, answer any stray admin-only callback
+    @router.callback_query()
+    async def _dealer_cb_fallback(cb: CallbackQuery) -> None:
+        await cb.answer()
+
 
 def main_menu_kb() -> ReplyKeyboardMarkup:
     if is_dealer_mode():
@@ -294,16 +304,6 @@ def dealer_filter(query):
         return query.where(Item.dealer == settings.DEALER_NAME)
     return query
 
-def ensure_allowed_user(message: Message) -> bool:
-    if not is_dealer_mode():
-        return True
-    if settings.OWNER_CHAT_ID and str(message.from_user.id) != str(settings.OWNER_CHAT_ID):
-        return False
-    return True
-
-def ensure_admin_only():
-    return "Эта команда недоступна в вашем боте. Обратитесь к администратору."
-
 async def set_bot_commands(bot: Bot) -> None:
     commands = BOT_COMMANDS_DEALER if is_dealer_mode() else BOT_COMMANDS_ADMIN
     await bot.set_my_commands(commands=commands, scope=BotCommandScopeDefault())
@@ -329,8 +329,6 @@ async def set_bot_commands(bot: Bot) -> None:
 @router.message(CommandStart())
 @router.message(F.text == "/start")
 async def on_start(message: Message) -> None:
-    if not ensure_allowed_user(message):
-        return
     role = "dealer" if is_dealer_mode() else "admin"
     who = f" ({settings.DEALER_NAME})" if is_dealer_mode() else ""
     await message.answer(
@@ -342,8 +340,6 @@ async def on_start(message: Message) -> None:
 @router.message(Command("help"))
 @router.message(F.text.in_(["/help", "ℹ️ Помощь"]))
 async def on_help(message: Message) -> None:
-    if not ensure_allowed_user(message):
-        return
     commands = BOT_COMMANDS_DEALER if is_dealer_mode() else BOT_COMMANDS_ADMIN
     text = "Доступные команды:\n" + "\n".join([f"/{c.command} — {c.description}" for c in commands])
     await message.answer(text)
@@ -351,22 +347,16 @@ async def on_help(message: Message) -> None:
 @router.message(Command("menu"))
 @router.message(F.text == "/menu")
 async def show_menu(message: Message) -> None:
-    if not ensure_allowed_user(message):
-        return
     await message.answer("Клавиатура показана.", reply_markup=main_menu_kb())
 
 @router.message(Command("hide"))
 @router.message(F.text.in_(["/hide", "👁 Скрыть"]))
 async def hide_menu(message: Message) -> None:
-    if not ensure_allowed_user(message):
-        return
     await message.answer("Клавиатура скрыта.", reply_markup=ReplyKeyboardRemove())
 
 @router.message(Command("status"))
 @router.message(F.text.in_(["/status", "📊 Статус"]))
 async def on_status(message: Message) -> None:
-    if not ensure_allowed_user(message):
-        return
     async with SessionLocal() as session:
         q = dealer_filter(select(Item))
         total = (await session.execute(q)).scalars().unique().all()
@@ -387,14 +377,9 @@ def tz_switch_kb() -> InlineKeyboardMarkup:
         ]
     ])
 
-@router.message(Command("timezone"))
-@router.message(F.text.in_(["/timezone", "🌐 Часовой пояс"]))
+@_admin.message(Command("timezone"))
+@_admin.message(F.text.in_(["/timezone", "🌐 Часовой пояс"]))
 async def show_timezone(message: Message) -> None:
-    if not ensure_allowed_user(message):
-        return
-    if is_dealer_mode():
-        await message.answer(ensure_admin_only())
-        return
     local_now = now_tz()
     utc_now = datetime.now(timezone.utc)
     text = (
@@ -405,11 +390,8 @@ async def show_timezone(message: Message) -> None:
     )
     await message.answer(text, reply_markup=tz_switch_kb())
 
-@router.callback_query(F.data.startswith("tz:set:"))
+@_admin.callback_query(F.data.startswith("tz:set:"))
 async def tz_set(cb: CallbackQuery) -> None:
-    if is_dealer_mode():
-        await cb.answer("Недоступно", show_alert=False)
-        return
     await cb.answer()
     tz_name = cb.data.split(":", 2)[-1]
     ok = set_active_timezone_name(tz_name)
@@ -426,25 +408,15 @@ class AddStates(StatesGroup):
     waiting_duedatetime = State()
     waiting_note = State()
 
-@router.message(Command("cancel"))
-@router.message(F.text.in_(["/cancel", "❌ Отмена"]))
+@_admin.message(Command("cancel"))
+@_admin.message(F.text.in_(["/cancel", "❌ Отмена"]))
 async def on_cancel(message: Message, state: FSMContext) -> None:
-    if not ensure_allowed_user(message):
-        return
-    if is_dealer_mode():
-        await message.answer(ensure_admin_only())
-        return
     await state.clear()
     await message.answer("Отменено.", reply_markup=main_menu_kb())
 
-@router.message(Command("add"))
-@router.message(F.text.in_(["/add", "➕ Добавить"]))
+@_admin.message(Command("add"))
+@_admin.message(F.text.in_(["/add", "➕ Добавить"]))
 async def add_start(message: Message, state: FSMContext) -> None:
-    if not ensure_allowed_user(message):
-        return
-    if is_dealer_mode():
-        await message.answer(ensure_admin_only())
-        return
     await state.clear()
     await state.set_state(AddStates.waiting_user_id)
     await message.answer("Шаг 1/4. Введите USER ID (число):")
@@ -533,14 +505,9 @@ def add_months(dt: datetime, months: int = 1) -> datetime:
     return dt.replace(year=y, month=m, day=d)
 
 
-@router.message(Command("renew"))
-@router.message(F.text.in_(["/renew", "🔄 Продлить"]))
+@_admin.message(Command("renew"))
+@_admin.message(F.text.in_(["/renew", "🔄 Продлить"]))
 async def renew_start(message: Message, state: FSMContext) -> None:
-    if not ensure_allowed_user(message):
-        return
-    if is_dealer_mode():
-        await message.answer(ensure_admin_only())
-        return
     await state.clear()
     await state.set_state(RenewStates.waiting_userid)
     await message.answer("Укажи USERID клиента, которого нужно продлить:")
@@ -740,14 +707,9 @@ class DeleteStates(StatesGroup):
     waiting_userid = State()
     waiting_confirm = State()
 
-@router.message(Command("delete"))
-@router.message(F.text.in_(["/delete", "🗑 Удалить"]))
+@_admin.message(Command("delete"))
+@_admin.message(F.text.in_(["/delete", "🗑 Удалить"]))
 async def delete_start(message: Message, state: FSMContext) -> None:
-    if not ensure_allowed_user(message):
-        return
-    if is_dealer_mode():
-        await message.answer(ensure_admin_only())
-        return
     await state.clear()
     await state.set_state(DeleteStates.waiting_userid)
     await message.answer(
@@ -884,14 +846,9 @@ FIELD_LABELS = {
 }
 
 
-@router.message(Command("edit"))
-@router.message(F.text.in_(["/edit", "✏️ Редактор"]))
+@_admin.message(Command("edit"))
+@_admin.message(F.text.in_(["/edit", "✏️ Редактор"]))
 async def edit_start(message: Message, state: FSMContext) -> None:
-    if not ensure_allowed_user(message):
-        return
-    if is_dealer_mode():
-        await message.answer(ensure_admin_only())
-        return
     await state.clear()
     await state.set_state(EditStates.waiting_search)
     await message.answer(
@@ -1025,8 +982,6 @@ async def edit_back(cb: CallbackQuery, state: FSMContext) -> None:
 @router.message(Command("list"))
 @router.message(F.text.in_(["/list", "📋 Список"]))
 async def on_list(message: Message) -> None:
-    if not ensure_allowed_user(message):
-        return
     async with SessionLocal() as session:
         q = dealer_filter(select(Item).order_by(Item.due_date.asc()))
         items = (await session.execute(q)).scalars().all()
@@ -1046,8 +1001,6 @@ async def on_list(message: Message) -> None:
 @router.message(Command("disabled"))
 @router.message(F.text.in_(["/disabled", "⛔ Отключённые"]))
 async def on_disabled(message: Message) -> None:
-    if not ensure_allowed_user(message):
-        return
     now = now_tz()
     async with SessionLocal() as session:
         q = dealer_filter(select(Item).order_by(Item.due_date.asc()))
@@ -1066,8 +1019,6 @@ async def on_disabled(message: Message) -> None:
 @router.message(Command("next"))
 @router.message(F.text.in_(["/next", "⏰ Ближайшие"]))
 async def on_next(message: Message) -> None:
-    if not ensure_allowed_user(message):
-        return
     now = now_tz()
     end = now + timedelta(days=3)
     async with SessionLocal() as session:
@@ -1164,23 +1115,15 @@ async def dealers_counts_text() -> str:
     lines.append("Выберите действие:")
     return "\n".join(lines)
 
-@router.message(Command("dealers"))
-@router.message(F.text.in_(["/dealers", "👥 Дилеры"]))
+@_admin.message(Command("dealers"))
+@_admin.message(F.text.in_(["/dealers", "👥 Дилеры"]))
 async def dealers_home(message: Message, state: FSMContext) -> None:
-    if not ensure_allowed_user(message):
-        return
-    if is_dealer_mode():
-        await message.answer(ensure_admin_only())
-        return
     await state.clear()
     text = await dealers_counts_text()
     await message.answer(text, reply_markup=await dealers_menu_kb())
 
-@router.callback_query(F.data.startswith("dealers:view:"))
+@_admin.callback_query(F.data.startswith("dealers:view:"))
 async def dealers_view(cb: CallbackQuery) -> None:
-    if is_dealer_mode():
-        await cb.answer("Недоступно", show_alert=False)
-        return
     await cb.answer()
     code = cb.data.split(":")[-1]
     if code == MAIN_CODE:
@@ -1205,11 +1148,8 @@ async def dealers_view(cb: CallbackQuery) -> None:
         await send_pre_chunk(cb.message, ch + suffix)
     await cb.message.answer(f"Всего записей ({title}): {len(items)}", reply_markup=await dealers_menu_kb())
 
-@router.callback_query(F.data.startswith("dealers:export:"))
+@_admin.callback_query(F.data.startswith("dealers:export:"))
 async def dealers_export(cb: CallbackQuery) -> None:
-    if is_dealer_mode():
-        await cb.answer("Недоступно", show_alert=False)
-        return
     await cb.answer()
     code = cb.data.split(":")[-1]
     if code == MAIN_CODE:
@@ -1236,11 +1176,8 @@ class DealerAssignStates(StatesGroup):
     waiting_ids = State()
     waiting_pick = State()
 
-@router.callback_query(F.data == "dealers:assign:start")
+@_admin.callback_query(F.data == "dealers:assign:start")
 async def dealers_assign_start(cb: CallbackQuery, state: FSMContext) -> None:
-    if is_dealer_mode():
-        await cb.answer("Недоступно", show_alert=False)
-        return
     await cb.answer()
     await state.clear()
     await state.set_state(DealerAssignStates.waiting_ids)
@@ -1268,11 +1205,8 @@ async def dealers_pick_kb() -> InlineKeyboardMarkup:
     rows.append([InlineKeyboardButton(text=f"Назначить → {MAIN_TITLE}", callback_data=f"dealers:assign:pick:{MAIN_CODE}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
-@router.message(DealerAssignStates.waiting_ids)
+@_admin.message(DealerAssignStates.waiting_ids)
 async def dealers_assign_ids(message: Message, state: FSMContext) -> None:
-    if is_dealer_mode():
-        await message.answer(ensure_admin_only())
-        return
     ids = parse_user_ids(message.text or "")
     if not ids:
         await message.answer("Не удалось распознать ни одного USERID. Пришлите числа через запятую/пробел/строки или /cancel.")
@@ -1287,11 +1221,8 @@ async def dealers_assign_ids(message: Message, state: FSMContext) -> None:
         reply_markup=await dealers_pick_kb(),
     )
 
-@router.callback_query(F.data.startswith("dealers:assign:pick:"))
+@_admin.callback_query(F.data.startswith("dealers:assign:pick:"))
 async def dealers_assign_pick(cb: CallbackQuery, state: FSMContext) -> None:
-    if is_dealer_mode():
-        await cb.answer("Недоступно", show_alert=False)
-        return
     await cb.answer()
     code = cb.data.split(":")[-1]
     if code == MAIN_CODE:
@@ -1337,11 +1268,8 @@ class AddDealerStates(StatesGroup):
     waiting_chat_id = State()
 
 
-@router.callback_query(F.data == "dealers:add:start")
+@_admin.callback_query(F.data == "dealers:add:start")
 async def dealer_add_start(cb: CallbackQuery, state: FSMContext) -> None:
-    if is_dealer_mode():
-        await cb.answer("Недоступно", show_alert=False)
-        return
     await cb.answer()
     await state.clear()
     await state.set_state(AddDealerStates.waiting_code)
@@ -1424,11 +1352,8 @@ async def dealer_add_chat_id(message: Message, state: FSMContext) -> None:
 
 # ===== Удаление дилера (только админ) =====
 
-@router.callback_query(F.data == "dealers:del:start")
+@_admin.callback_query(F.data == "dealers:del:start")
 async def dealer_del_start(cb: CallbackQuery) -> None:
-    if is_dealer_mode():
-        await cb.answer("Недоступно", show_alert=False)
-        return
     await cb.answer()
     dealers = await list_dealers()
     if not dealers:
@@ -1441,11 +1366,8 @@ async def dealer_del_start(cb: CallbackQuery) -> None:
     )
 
 
-@router.callback_query(F.data.startswith("dealers:del:pick:"))
+@_admin.callback_query(F.data.startswith("dealers:del:pick:"))
 async def dealer_del_pick(cb: CallbackQuery) -> None:
-    if is_dealer_mode():
-        await cb.answer("Недоступно", show_alert=False)
-        return
     await cb.answer()
     code = cb.data.split(":")[-1]
     d = await get_dealer(code)
@@ -1471,11 +1393,8 @@ async def dealer_del_cancel(cb: CallbackQuery) -> None:
     await cb.message.answer("Удаление отменено.", reply_markup=await dealers_menu_kb())
 
 
-@router.callback_query(F.data.startswith("dealers:del:confirm:"))
+@_admin.callback_query(F.data.startswith("dealers:del:confirm:"))
 async def dealer_del_confirm(cb: CallbackQuery) -> None:
-    if is_dealer_mode():
-        await cb.answer("Недоступно", show_alert=False)
-        return
     await cb.answer()
     code = cb.data.split(":")[-1]
     async with SessionLocal() as session:
@@ -1506,11 +1425,8 @@ class BroadcastStates(StatesGroup):
     waiting_text = State()
 
 
-@router.callback_query(F.data == "dealers:msg:start")
+@_admin.callback_query(F.data == "dealers:msg:start")
 async def dealer_msg_start(cb: CallbackQuery) -> None:
-    if is_dealer_mode():
-        await cb.answer("Недоступно", show_alert=False)
-        return
     await cb.answer()
     dealers = await list_dealers()
     if not dealers:
@@ -1523,11 +1439,8 @@ async def dealer_msg_start(cb: CallbackQuery) -> None:
     await cb.message.answer("Кому отправить сообщение?", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 
-@router.callback_query(F.data.startswith("dealers:msg:pick:"))
+@_admin.callback_query(F.data.startswith("dealers:msg:pick:"))
 async def dealer_msg_pick(cb: CallbackQuery, state: FSMContext) -> None:
-    if is_dealer_mode():
-        await cb.answer("Недоступно", show_alert=False)
-        return
     await cb.answer()
     code = cb.data.split(":")[-1]
     d = await get_dealer(code)
@@ -1579,11 +1492,8 @@ async def dealer_msg_send(message: Message, state: FSMContext, bot: Bot) -> None
     await message.answer(f"✅ Сообщение отправлено дилеру «{d.title}».", reply_markup=await dealers_menu_kb())
 
 
-@router.callback_query(F.data == "dealers:broadcast:start")
+@_admin.callback_query(F.data == "dealers:broadcast:start")
 async def dealer_broadcast_start(cb: CallbackQuery, state: FSMContext) -> None:
-    if is_dealer_mode():
-        await cb.answer("Недоступно", show_alert=False)
-        return
     await cb.answer()
     targets = [d for d in await list_dealers() if d.chat_id is not None]
     if not targets:
@@ -1629,21 +1539,6 @@ async def dealer_broadcast_send(message: Message, state: FSMContext, bot: Bot) -
             "Эти дилеры, вероятно, не нажимали «Запустить» (Start) у бота-админа."
         )
     await message.answer(report, reply_markup=await dealers_menu_kb())
-
-# ==== Заглушки для dealer-режима ====
-
-if is_dealer_mode():
-    @router.message(Command("add"))
-    @router.message(Command("renew"))
-    @router.message(Command("delete"))
-    @router.message(Command("dealers"))
-    @router.message(Command("timezone"))
-    @router.message(F.text.in_(["/add","/renew","/delete","/dealers","/timezone","/cancel"]))
-    async def dealer_stub(message: Message) -> None:
-        if not ensure_allowed_user(message):
-            return
-        await message.answer(ensure_admin_only())
-
 
 # ====== Кабинет дилера (единый бот, роль 'dealer') ======
 
@@ -2448,23 +2343,15 @@ def _parse_amount(text: str) -> float | None:
     return v
 
 
-@router.message(Command("balance"))
-@router.message(F.text.in_(["/balance", "💰 Баланс"]))
+@_admin.message(Command("balance"))
+@_admin.message(F.text.in_(["/balance", "💰 Баланс"]))
 async def on_balance(message: Message, state: FSMContext) -> None:
-    if not ensure_allowed_user(message):
-        return
-    if is_dealer_mode():
-        await message.answer(ensure_admin_only())
-        return
     await state.clear()
     await message.answer(await balance_overview_text(), reply_markup=balance_menu_kb())
 
 
-@router.callback_query(F.data == "bal:add:start")
+@_admin.callback_query(F.data == "bal:add:start")
 async def bal_add_start(cb: CallbackQuery) -> None:
-    if is_dealer_mode():
-        await cb.answer("Недоступно", show_alert=False)
-        return
     await cb.answer()
     if not await list_dealers():
         await cb.message.answer("Список дилеров пуст.", reply_markup=balance_menu_kb())
@@ -2472,11 +2359,8 @@ async def bal_add_start(cb: CallbackQuery) -> None:
     await cb.message.answer("Кому добавить долг?", reply_markup=await _balance_pick_dealer_kb("add"))
 
 
-@router.callback_query(F.data == "bal:sub:start")
+@_admin.callback_query(F.data == "bal:sub:start")
 async def bal_sub_start(cb: CallbackQuery) -> None:
-    if is_dealer_mode():
-        await cb.answer("Недоступно", show_alert=False)
-        return
     await cb.answer()
     if not await list_dealers():
         await cb.message.answer("Список дилеров пуст.", reply_markup=balance_menu_kb())
@@ -2484,11 +2368,8 @@ async def bal_sub_start(cb: CallbackQuery) -> None:
     await cb.message.answer("У кого снять долг?", reply_markup=await _balance_pick_dealer_kb("sub"))
 
 
-@router.callback_query(F.data.startswith("bal:pick:"))
+@_admin.callback_query(F.data.startswith("bal:pick:"))
 async def bal_pick(cb: CallbackQuery, state: FSMContext) -> None:
-    if is_dealer_mode():
-        await cb.answer("Недоступно", show_alert=False)
-        return
     await cb.answer()
     parts = cb.data.split(":")
     if len(parts) != 4:
@@ -2562,11 +2443,8 @@ async def bal_comment(message: Message, state: FSMContext, bot: Bot) -> None:
     await message.answer(await balance_overview_text(), reply_markup=balance_menu_kb())
 
 
-@router.callback_query(F.data == "bal:price:start")
+@_admin.callback_query(F.data == "bal:price:start")
 async def bal_price_start(cb: CallbackQuery, state: FSMContext) -> None:
-    if is_dealer_mode():
-        await cb.answer("Недоступно", show_alert=False)
-        return
     await cb.answer()
     price = await get_price()
     await state.clear()
@@ -2639,32 +2517,21 @@ async def pay_admin_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-@router.message(Command("pay"))
-@router.message(F.text.in_(["/pay", "💳 Оплата"]))
+@_admin.message(Command("pay"))
+@_admin.message(F.text.in_(["/pay", "💳 Оплата"]))
 async def on_pay(message: Message, state: FSMContext) -> None:
-    if not ensure_allowed_user(message):
-        return
-    if is_dealer_mode():
-        await message.answer(ensure_admin_only())
-        return
     await state.clear()
     await message.answer(await pay_admin_text(), reply_markup=await pay_admin_kb())
 
 
-@router.callback_query(F.data == "pm:home")
+@_admin.callback_query(F.data == "pm:home")
 async def pm_home(cb: CallbackQuery) -> None:
-    if is_dealer_mode():
-        await cb.answer("Недоступно", show_alert=False)
-        return
     await cb.answer()
     await cb.message.answer(await pay_admin_text(), reply_markup=await pay_admin_kb())
 
 
-@router.callback_query(F.data.startswith("pm:open:"))
+@_admin.callback_query(F.data.startswith("pm:open:"))
 async def pm_open(cb: CallbackQuery) -> None:
-    if is_dealer_mode():
-        await cb.answer("Недоступно", show_alert=False)
-        return
     await cb.answer()
     try:
         pm_id = int(cb.data.split(":")[-1])
@@ -2678,11 +2545,8 @@ async def pm_open(cb: CallbackQuery) -> None:
     await cb.message.answer(text, reply_markup=kb)
 
 
-@router.callback_query(F.data.startswith("pm:toggle:"))
+@_admin.callback_query(F.data.startswith("pm:toggle:"))
 async def pm_toggle(cb: CallbackQuery) -> None:
-    if is_dealer_mode():
-        await cb.answer("Недоступно", show_alert=False)
-        return
     await cb.answer()
     try:
         pm_id = int(cb.data.split(":")[-1])
@@ -2703,11 +2567,8 @@ async def pm_toggle(cb: CallbackQuery) -> None:
     )
 
 
-@router.callback_query(F.data.startswith("pm:req:"))
+@_admin.callback_query(F.data.startswith("pm:req:"))
 async def pm_req_start(cb: CallbackQuery, state: FSMContext) -> None:
-    if is_dealer_mode():
-        await cb.answer("Недоступно", show_alert=False)
-        return
     await cb.answer()
     try:
         pm_id = int(cb.data.split(":")[-1])
@@ -2752,11 +2613,8 @@ async def pm_req_save(message: Message, state: FSMContext) -> None:
     await message.answer(await pay_admin_text(), reply_markup=await pay_admin_kb())
 
 
-@router.callback_query(F.data == "pm:add:start")
+@_admin.callback_query(F.data == "pm:add:start")
 async def pm_add_start(cb: CallbackQuery, state: FSMContext) -> None:
-    if is_dealer_mode():
-        await cb.answer("Недоступно", show_alert=False)
-        return
     await cb.answer()
     await state.clear()
     await state.set_state(PayAdminStates.waiting_method_name)
@@ -2787,11 +2645,8 @@ async def pm_add_save(message: Message, state: FSMContext) -> None:
     await message.answer(await pay_admin_text(), reply_markup=await pay_admin_kb())
 
 
-@router.callback_query(F.data.startswith("pay:ok:"))
+@_admin.callback_query(F.data.startswith("pay:ok:"))
 async def pay_confirm(cb: CallbackQuery, bot: Bot) -> None:
-    if is_dealer_mode():
-        await cb.answer("Недоступно", show_alert=False)
-        return
     await cb.answer()
     try:
         pay_id = int(cb.data.split(":")[-1])
@@ -2834,11 +2689,8 @@ async def pay_confirm(cb: CallbackQuery, bot: Bot) -> None:
     )
 
 
-@router.callback_query(F.data.startswith("pay:no:"))
+@_admin.callback_query(F.data.startswith("pay:no:"))
 async def pay_reject(cb: CallbackQuery, bot: Bot) -> None:
-    if is_dealer_mode():
-        await cb.answer("Недоступно", show_alert=False)
-        return
     await cb.answer()
     try:
         pay_id = int(cb.data.split(":")[-1])
@@ -2947,11 +2799,8 @@ async def _variant_card(v: PaymentVariant, m: PaymentMethod) -> tuple[str, Inlin
 
 # --- Переименование метода ---
 
-@router.callback_query(F.data.startswith("pm:rename:"))
+@_admin.callback_query(F.data.startswith("pm:rename:"))
 async def pm_rename_start(cb: CallbackQuery, state: FSMContext) -> None:
-    if is_dealer_mode():
-        await cb.answer("Недоступно", show_alert=False)
-        return
     await cb.answer()
     try:
         pm_id = int(cb.data.split(":")[-1])
@@ -3005,11 +2854,8 @@ async def pm_rename_save(message: Message, state: FSMContext) -> None:
 
 # --- Добавление вида под методом ---
 
-@router.callback_query(F.data.startswith("pm:vadd:"))
+@_admin.callback_query(F.data.startswith("pm:vadd:"))
 async def pm_vadd_start(cb: CallbackQuery, state: FSMContext) -> None:
-    if is_dealer_mode():
-        await cb.answer("Недоступно", show_alert=False)
-        return
     await cb.answer()
     try:
         pm_id = int(cb.data.split(":")[-1])
@@ -3070,11 +2916,8 @@ async def pm_vadd_req_save(message: Message, state: FSMContext) -> None:
 
 # --- Карточка вида: открыть, вкл/выкл, реквизиты, переименовать ---
 
-@router.callback_query(F.data.startswith("pv:open:"))
+@_admin.callback_query(F.data.startswith("pv:open:"))
 async def pv_open(cb: CallbackQuery) -> None:
-    if is_dealer_mode():
-        await cb.answer("Недоступно", show_alert=False)
-        return
     await cb.answer()
     try:
         v_id = int(cb.data.split(":")[-1])
@@ -3092,11 +2935,8 @@ async def pv_open(cb: CallbackQuery) -> None:
     await cb.message.answer(text, reply_markup=kb)
 
 
-@router.callback_query(F.data.startswith("pv:toggle:"))
+@_admin.callback_query(F.data.startswith("pv:toggle:"))
 async def pv_toggle(cb: CallbackQuery) -> None:
-    if is_dealer_mode():
-        await cb.answer("Недоступно", show_alert=False)
-        return
     await cb.answer()
     try:
         v_id = int(cb.data.split(":")[-1])
@@ -3117,11 +2957,8 @@ async def pv_toggle(cb: CallbackQuery) -> None:
         await cb.message.answer(text, reply_markup=kb)
 
 
-@router.callback_query(F.data.startswith("pv:req:"))
+@_admin.callback_query(F.data.startswith("pv:req:"))
 async def pv_req_start(cb: CallbackQuery, state: FSMContext) -> None:
-    if is_dealer_mode():
-        await cb.answer("Недоступно", show_alert=False)
-        return
     await cb.answer()
     try:
         v_id = int(cb.data.split(":")[-1])
@@ -3171,11 +3008,8 @@ async def pv_req_save(message: Message, state: FSMContext) -> None:
         await message.answer(text, reply_markup=kb)
 
 
-@router.callback_query(F.data.startswith("pv:rename:"))
+@_admin.callback_query(F.data.startswith("pv:rename:"))
 async def pv_rename_start(cb: CallbackQuery, state: FSMContext) -> None:
-    if is_dealer_mode():
-        await cb.answer("Недоступно", show_alert=False)
-        return
     await cb.answer()
     try:
         v_id = int(cb.data.split(":")[-1])
@@ -3229,11 +3063,8 @@ class AdminKeyToDealerStates(StatesGroup):
     waiting_keycode = State()
 
 
-@router.callback_query(F.data == "dkey:start")
+@_admin.callback_query(F.data == "dkey:start")
 async def dealer_key_start(cb: CallbackQuery) -> None:
-    if is_dealer_mode():
-        await cb.answer("Недоступно", show_alert=False)
-        return
     await cb.answer()
     dealers = await list_dealers()
     if not dealers:
@@ -3246,11 +3077,8 @@ async def dealer_key_start(cb: CallbackQuery) -> None:
     await cb.message.answer("Кому отправить ключ?", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 
-@router.callback_query(F.data.startswith("dkey:pick:"))
+@_admin.callback_query(F.data.startswith("dkey:pick:"))
 async def dealer_key_pick(cb: CallbackQuery, state: FSMContext) -> None:
-    if is_dealer_mode():
-        await cb.answer("Недоступно", show_alert=False)
-        return
     await cb.answer()
     code = cb.data.split(":")[-1]
     d = await get_dealer(code)
@@ -3557,14 +3385,9 @@ def backup_menu_kb() -> InlineKeyboardMarkup:
     ])
 
 
-@router.message(Command("backup"))
-@router.message(F.text.in_(["/backup", "💾 Бэкап"]))
+@_admin.message(Command("backup"))
+@_admin.message(F.text.in_(["/backup", "💾 Бэкап"]))
 async def backup_home(message: Message, state: FSMContext) -> None:
-    if not ensure_allowed_user(message):
-        return
-    if is_dealer_mode():
-        await message.answer(ensure_admin_only())
-        return
     await state.clear()
     await message.answer("💾 Бэкап базы данных\n\nВыберите действие:", reply_markup=backup_menu_kb())
 
