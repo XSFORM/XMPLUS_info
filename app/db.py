@@ -61,6 +61,21 @@ class RouterItem(Base):
     last_notified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class DealerOrder(Base):
+    """Заявка дилера на ключи (раньше хранилось в памяти _pending_orders)."""
+    __tablename__ = "dealer_orders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    dealer_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    dealer_title: Mapped[str] = mapped_column(String(128), nullable=False)
+    dealer_chat_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    names_json: Mapped[str] = mapped_column(String(2048), nullable=False, default="[]")
+    fulfilled: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+
 class Dealer(Base):
     """Дилер для раздела /dealers (динамический список)."""
     __tablename__ = "dealers"

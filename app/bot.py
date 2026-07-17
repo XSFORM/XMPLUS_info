@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 
 from datetime import datetime, timezone, timedelta
-import csv, io, html, os, re, calendar, zipfile, shutil
+import csv, io, html, json, os, re, calendar, zipfile, shutil
 from pathlib import Path
 from typing import List
 
@@ -31,7 +31,7 @@ from sqlalchemy import select, delete, update
 from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
 
 from app.db import (
-    SessionLocal, engine, Item, RouterItem, Dealer, BalanceTxn, PaymentMethod, PaymentVariant, Payment,
+    SessionLocal, engine, Item, RouterItem, Dealer, DealerOrder, BalanceTxn, PaymentMethod, PaymentVariant, Payment,
     get_price, set_price, apply_balance_change,
 )
 from app.config import settings
@@ -47,16 +47,48 @@ from app.utils import (
 
 router = Router()
 
-# Хранилище заказов дилеров (order_id → dict с данными)
-_pending_orders: dict[str, dict] = {}
-_order_counter = 0
-
-def _next_order_id() -> str:
-    global _order_counter
-    _order_counter += 1
-    return str(_order_counter)
-
 log = logging.getLogger(__name__)
+
+
+async def _get_order(oid: str):
+    """Fetch DealerOrder by id, return dict-like or None."""
+    try:
+        order_id = int(oid)
+    except (ValueError, TypeError):
+        return None
+    async with SessionLocal() as session:
+        row = (await session.execute(
+            select(DealerOrder).where(DealerOrder.id == order_id)
+        )).scalars().first()
+        if not row:
+            return None
+        return {
+            "id": row.id,
+            "dealer_code": row.dealer_code,
+            "dealer_title": row.dealer_title,
+            "dealer_chat_id": row.dealer_chat_id,
+            "names": json.loads(row.names_json),
+            "fulfilled": row.fulfilled,
+        }
+
+
+async def _update_order_fulfilled(oid: str, fulfilled: int) -> None:
+    """Update fulfilled counter in DB."""
+    async with SessionLocal() as session:
+        await session.execute(
+            update(DealerOrder).where(DealerOrder.id == int(oid)).values(fulfilled=fulfilled)
+        )
+        await session.commit()
+
+
+async def _delete_order(oid: str) -> None:
+    """Delete completed order from DB."""
+    async with SessionLocal() as session:
+        await session.execute(
+            delete(DealerOrder).where(DealerOrder.id == int(oid))
+        )
+        await session.commit()
+
 
 
 async def _notify_fail(bot: Bot, dest_name: str, err: Exception) -> None:
@@ -1912,14 +1944,17 @@ async def dealer_order_collect_name(message: Message, state: FSMContext, bot: Bo
     names_list = "\n".join(f"  {i+1}) {n}" for i, n in enumerate(names))
     owner_chat = int(settings.OWNER_CHAT_ID) if settings.OWNER_CHAT_ID else None
     if owner_chat:
-        oid = _next_order_id()
-        _pending_orders[oid] = {
-            "dealer_code": d.code,
-            "dealer_title": d.title,
-            "dealer_chat_id": d.chat_id,
-            "names": list(names),
-            "fulfilled": 0,
-        }
+        async with SessionLocal() as _s:
+            new_order = DealerOrder(
+                dealer_code=d.code,
+                dealer_title=d.title,
+                dealer_chat_id=d.chat_id,
+                names_json=json.dumps(names, ensure_ascii=False),
+                fulfilled=0,
+            )
+            _s.add(new_order)
+            await _s.commit()
+            oid = str(new_order.id)
         admin_text = (
             f"📦 Заявка на новые ключи\n\n"
             f"Дилер: {d.title}\n"
@@ -3317,7 +3352,7 @@ class OrderFulfillStates(StatesGroup):
 async def order_fulfill_start(cb: CallbackQuery, state: FSMContext) -> None:
     await cb.answer()
     oid = cb.data.split(":", 1)[1]
-    order = _pending_orders.get(oid)
+    order = await _get_order(oid)
     if not order:
         await cb.message.answer("Заказ не найден или уже выполнен.")
         return
@@ -3383,7 +3418,7 @@ async def oful_key_code(message: Message, state: FSMContext) -> None:
     await state.update_data(key_code=key_code)
     data = await state.get_data()
     oid = data["order_id"]
-    order = _pending_orders.get(oid)
+    order = await _get_order(oid)
     if not order:
         await state.clear()
         await message.answer("Заказ не найден.")
@@ -3417,7 +3452,7 @@ async def oful_confirm(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     await cb.answer()
     data = await state.get_data()
     oid = data["order_id"]
-    order = _pending_orders.get(oid)
+    order = await _get_order(oid)
     if not order:
         await state.clear()
         await cb.message.answer("Заказ не найден.")
@@ -3471,7 +3506,8 @@ async def oful_confirm(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
             await cb.message.answer(f"⚠️ Не удалось отправить ключ дилеру (chat_id={dealer_chat_id}).")
 
     # 4) Обновляем счётчик
-    order["fulfilled"] = idx + 1
+    await _update_order_fulfilled(oid, idx + 1)
+    order["fulfilled"] = idx + 1  # update local copy
     await state.clear()
 
     bal_str = f"${new_bal:.2f}" if new_bal is not None else "?"
@@ -3492,7 +3528,7 @@ async def oful_confirm(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
             reply_markup=kb,
         )
     else:
-        del _pending_orders[oid]
+        await _delete_order(oid)
         await cb.message.answer("🎉 Все ключи из заказа выполнены!")
 
 
