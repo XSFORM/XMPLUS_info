@@ -6,9 +6,16 @@ from aiogram import Bot, Dispatcher
 from aiogram.types import ErrorEvent
 
 from app.config import settings
-from app.bot import router, dealer_router, guest_router, set_bot_commands
+from app.bot import router, dealer_router, guest_router, set_bot_commands, is_dealer_mode
 from app.db import init_db, seed_default_dealers, seed_payment_methods
 from app.scheduler import start_scheduler
+
+from app.handlers.add import router as add_router
+from app.handlers.renew import router as renew_router
+from app.handlers.dealers import router as dealers_router
+from app.handlers.payments import router as payments_router
+from app.handlers.backup import router as backup_router
+from app.handlers.routers import router as routers_router
 
 log = logging.getLogger(__name__)
 
@@ -63,6 +70,15 @@ async def main() -> None:
     dp.include_router(router)
     dp.include_router(dealer_router)
     dp.include_router(guest_router)
+
+    # Модули-хендлеры (admin-only — только в admin-боте)
+    if not is_dealer_mode():
+        router.include_router(add_router)
+        router.include_router(renew_router)
+        router.include_router(dealers_router)
+        router.include_router(payments_router)
+        router.include_router(backup_router)
+        router.include_router(routers_router)
 
     # Запускаем планировщик задач (проверка истечений)
     start_scheduler(bot)
