@@ -15,6 +15,7 @@ from app.states import RouterAddStates, RouterEditStates, RouterRenewStates, Rou
 from app.keyboards import main_menu_kb
 from app.utils import parse_datetime_human, fmt_dt_human, now_tz, to_tz, get_active_timezone_name
 from app.bot import _trunc, split_text_chunks, send_pre_chunk
+from app.handlers.renew import add_months
 
 log = logging.getLogger(__name__)
 
@@ -249,11 +250,17 @@ async def rt_renew_search(message: Message, state: FSMContext) -> None:
         it = items[0]
         await state.update_data(rt_renew_id=it.id)
         await state.set_state(RouterRenewStates.waiting_due)
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Подставить текущую", callback_data=f"rt:rnpre:cur:{it.id}")],
+            [InlineKeyboardButton(text="Подставить +1 месяц", callback_data=f"rt:rnpre:p1m:{it.id}")],
+        ])
         tz = get_active_timezone_name()
         await message.answer(
             f"📋 {_rt_card(it)}\n\n"
-            f"Введите новую дату/время ({tz}):\n"
-            "Формат: YYYY-MM-DD HH:MM:SS или YYYY-MM-DD"
+            f"Текущая дата: {fmt_dt_human(it.due_date)}\n\n"
+            f"Введите новую дату ({tz}):\n"
+            "Формат: YYYY-MM-DD HH:MM:SS",
+            reply_markup=kb,
         )
         return
     rows = []
@@ -279,11 +286,56 @@ async def rt_renew_pick(cb: CallbackQuery, state: FSMContext) -> None:
         return
     await state.set_state(RouterRenewStates.waiting_due)
     await state.update_data(rt_renew_id=it.id)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Подставить текущую", callback_data=f"rt:rnpre:cur:{it.id}")],
+        [InlineKeyboardButton(text="Подставить +1 месяц", callback_data=f"rt:rnpre:p1m:{it.id}")],
+    ])
     tz = get_active_timezone_name()
     await cb.message.answer(
         f"📋 {_rt_card(it)}\n\n"
-        f"Введите новую дату/время ({tz}):\n"
-        "Формат: YYYY-MM-DD HH:MM:SS или YYYY-MM-DD"
+        f"Текущая дата: {fmt_dt_human(it.due_date)}\n\n"
+        f"Введите новую дату ({tz}):\n"
+        "Формат: YYYY-MM-DD HH:MM:SS",
+        reply_markup=kb,
+    )
+
+
+
+@router.callback_query(F.data.startswith("rt:rnpre:"))
+async def rt_renew_prefill(cb: CallbackQuery, state: FSMContext) -> None:
+    await cb.answer()
+    try:
+        _, _, kind, item_id_str = cb.data.split(":")
+        item_id = int(item_id_str)
+    except Exception:
+        return
+    async with SessionLocal() as session:
+        it = (await session.execute(select(RouterItem).where(RouterItem.id == item_id))).scalars().first()
+    if not it:
+        await cb.message.answer("Запись не найдена.")
+        return
+    base_dt = to_tz(it.due_date)
+    if kind == "p1m":
+        new_dt = add_months(base_dt, 1)
+    else:
+        new_dt = base_dt
+    # Сразу применяем
+    old_due = fmt_dt_human(it.due_date)
+    async with SessionLocal() as session:
+        item = (await session.execute(select(RouterItem).where(RouterItem.id == item_id))).scalars().first()
+        if not item:
+            await cb.message.answer("Запись не найдена.")
+            return
+        item.due_date = new_dt
+        item.notified_count = 0
+        item.last_notified_at = None
+        await session.commit()
+    await state.clear()
+    await cb.message.answer(
+        f"✅ Роутер продлён!\n\n"
+        f"Клиент: {it.client_name}\n"
+        f"Было: {old_due}\n"
+        f"Стало: {fmt_dt_human(new_dt)}",
     )
 
 
