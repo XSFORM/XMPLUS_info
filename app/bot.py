@@ -39,9 +39,12 @@ from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
 from app.db import (
     SessionLocal, engine, Item, RouterItem, Dealer, DealerOrder, BalanceTxn, PaymentMethod, PaymentVariant, Payment,
     get_price, set_price, apply_balance_change, MAIN_CODE, list_dealers, get_dealer,
+    list_payment_methods, get_payment_method,
+    list_payment_variants, get_payment_variant,
 )
 from app.config import settings
 from app.utils import (
+    parse_amount,
     parse_datetime_human,
     fmt_dt_human,
     now_tz,
@@ -1207,7 +1210,7 @@ async def dealer_pay_amount(message: Message, state: FSMContext, bot: Bot) -> No
     if not d:
         await state.clear()
         return
-    amount = _parse_amount(message.text or "")
+    amount = parse_amount(message.text or "")
     if amount is None:
         await message.answer("Введите положительное число (например 5). Ещё раз или /cancel.")
         return

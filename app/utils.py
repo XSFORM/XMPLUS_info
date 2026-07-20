@@ -110,3 +110,15 @@ def tz_offset_str() -> str:
     hh = abs(total_minutes) // 60
     mm = abs(total_minutes) % 60
     return f"{sign}{hh:02d}:{mm:02d}"
+
+
+def parse_amount(text: str) -> "float | None":
+    """Парсинг суммы из текста (запятая→точка, убирает +, проверяет >0)."""
+    s = (text or "").strip().replace(",", ".").lstrip("+")
+    try:
+        v = float(s)
+    except Exception:
+        return None
+    if v <= 0:
+        return None
+    return v

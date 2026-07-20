@@ -17,10 +17,10 @@ from app.db import (
 from app.config import settings
 from app.states import BalanceStates, PayAdminStates, AdminKeyToDealerStates
 from app.keyboards import main_menu_kb
-from app.utils import fmt_dt_human, now_tz, to_tz
+from app.utils import fmt_dt_human, now_tz, to_tz, parse_amount
 from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
 from app.bot import _notify_fail
-from app.db import list_dealers, get_dealer
+from app.db import list_dealers, get_dealer, list_payment_methods, get_payment_method, list_payment_variants, get_payment_variant
 from app.handlers.dealers import dealers_menu_kb
 
 log = logging.getLogger(__name__)
@@ -59,17 +59,6 @@ async def _balance_pick_dealer_kb(direction: str) -> InlineKeyboardMarkup:
             callback_data=f"bal:pick:{direction}:{d.code}",
         )])
     return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-def _parse_amount(text: str) -> float | None:
-    s = (text or "").strip().replace(",", ".").lstrip("+")
-    try:
-        v = float(s)
-    except Exception:
-        return None
-    if v <= 0:
-        return None
-    return v
 
 
 @router.message(Command("balance"))
@@ -120,7 +109,7 @@ async def bal_pick(cb: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(BalanceStates.waiting_amount)
 async def bal_amount(message: Message, state: FSMContext) -> None:
-    amount = _parse_amount(message.text or "")
+    amount = parse_amount(message.text or "")
     if amount is None:
         await message.answer("Введите положительное число (например 5). Ещё раз или /cancel.")
         return
@@ -186,7 +175,7 @@ async def bal_price_start(cb: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(BalanceStates.waiting_price)
 async def bal_price_set(message: Message, state: FSMContext) -> None:
-    amount = _parse_amount(message.text or "")
+    amount = parse_amount(message.text or "")
     if amount is None:
         await message.answer("Введите положительное число (например 5). Ещё раз или /cancel.")
         return
@@ -198,17 +187,7 @@ async def bal_price_set(message: Message, state: FSMContext) -> None:
 
 # ====== Методы оплаты и подтверждение оплат (админ) ======
 
-async def list_payment_methods(active_only: bool = False) -> list[PaymentMethod]:
-    async with SessionLocal() as session:
-        q = select(PaymentMethod).order_by(PaymentMethod.id.asc())
-        if active_only:
-            q = q.where(PaymentMethod.active.is_(True))
-        return (await session.execute(q)).scalars().all()
 
-
-async def get_payment_method(pm_id: int) -> PaymentMethod | None:
-    async with SessionLocal() as session:
-        return await session.get(PaymentMethod, pm_id)
 
 
 async def pay_admin_text() -> str:
@@ -451,17 +430,7 @@ async def pay_reject(cb: CallbackQuery, bot: Bot) -> None:
 
 # ====== Виды оплат и переименование (админ) ======
 
-async def list_payment_variants(method_id: int, active_only: bool = False) -> list[PaymentVariant]:
-    async with SessionLocal() as session:
-        q = select(PaymentVariant).where(PaymentVariant.method_id == method_id).order_by(PaymentVariant.id.asc())
-        if active_only:
-            q = q.where(PaymentVariant.active.is_(True))
-        return (await session.execute(q)).scalars().all()
 
-
-async def get_payment_variant(var_id: int) -> PaymentVariant | None:
-    async with SessionLocal() as session:
-        return await session.get(PaymentVariant, var_id)
 
 
 async def _method_card(m: PaymentMethod) -> tuple[str, InlineKeyboardMarkup]:

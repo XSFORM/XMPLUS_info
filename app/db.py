@@ -321,3 +321,32 @@ async def get_dealer(code: str) -> "Dealer | None":
             await session.execute(select(Dealer).where(Dealer.code == code))
         ).scalars().first()
 
+
+async def list_payment_methods(active_only: bool = False) -> list[PaymentMethod]:
+    """Все методы оплаты (опционально — только активные)."""
+    async with SessionLocal() as session:
+        q = select(PaymentMethod).order_by(PaymentMethod.id.asc())
+        if active_only:
+            q = q.where(PaymentMethod.active.is_(True))
+        return (await session.execute(q)).scalars().all()
+
+
+async def get_payment_method(pm_id: int) -> "PaymentMethod | None":
+    """Метод оплаты по id."""
+    async with SessionLocal() as session:
+        return await session.get(PaymentMethod, pm_id)
+
+
+async def list_payment_variants(method_id: int, active_only: bool = False) -> list[PaymentVariant]:
+    """Варианты оплаты по методу (опционально — только активные)."""
+    async with SessionLocal() as session:
+        q = select(PaymentVariant).where(PaymentVariant.method_id == method_id).order_by(PaymentVariant.id.asc())
+        if active_only:
+            q = q.where(PaymentVariant.active.is_(True))
+        return (await session.execute(q)).scalars().all()
+
+
+async def get_payment_variant(var_id: int) -> "PaymentVariant | None":
+    """Вариант оплаты по id."""
+    async with SessionLocal() as session:
+        return await session.get(PaymentVariant, var_id)
