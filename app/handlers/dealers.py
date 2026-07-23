@@ -9,7 +9,7 @@ from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile,
 )
 from aiogram.fsm.context import FSMContext
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, update
 
 from app.db import SessionLocal, Item, Dealer, MAIN_CODE, list_dealers, get_dealer
 from app.config import settings
