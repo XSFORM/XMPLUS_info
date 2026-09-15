@@ -1009,10 +1009,52 @@ async def dealer_cancel(message: Message, state: FSMContext) -> None:
 @dealer_router.message(F.text.in_(["/renew", "🔄 Продлить"]))
 async def dealer_renew_start(message: Message, state: FSMContext) -> None:
     await state.clear()
+    d = await dealer_by_chat(message.from_user.id)
     await state.set_state(DealerRenewStates.waiting_userid)
+
+    # Показать просроченных клиентов дилера
+    if d:
+        now = now_tz()
+        async with SessionLocal() as session:
+            items = (await session.execute(
+                select(Item).where(Item.dealer == d.code)
+                .order_by(Item.due_date.asc())
+            )).scalars().all()
+        expired = [it for it in items if to_tz(it.due_date) <= now]
+        if expired:
+            show = expired[:30]
+            w_uid = max(len(str(it.user_id)) for it in show)
+            w_un = max(len(it.username or "") for it in show)
+            w_cl = max(len(it.note or "") for it in show)
+            rows = []
+            buttons = []
+            for it in show:
+                uid = str(it.user_id).ljust(w_uid)
+                un = (it.username or "").ljust(w_un)
+                cl = (it.note or "").ljust(w_cl)
+                rows.append(f"{uid} | {un} | {cl}")
+                btn_parts = [f"🔄 {it.user_id}"]
+                if it.username:
+                    btn_parts.append(it.username)
+                if it.note:
+                    btn_parts.append(it.note)
+                buttons.append([InlineKeyboardButton(
+                    text=" • ".join(btn_parts),
+                    callback_data=f"drnexp:{it.id}",
+                )])
+            table = "\n".join(rows)
+            tail = f"\n(первые 30 из {len(expired)})" if len(expired) > 30 else ""
+            kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+            await message.answer(
+                f"⛔ Просроченные ({len(expired)}):{tail}\n"
+                f"<pre>{html.escape(table)}</pre>\n"
+                "Нажмите для продления:",
+                parse_mode="HTML",
+                reply_markup=kb,
+            )
+
     await message.answer(
-        "Продление клиента.\n"
-        "Введите USERID клиента, которого хотите продлить.\n"
+        "Или введите USERID клиента вручную.\n"
         "Отмена — /cancel",
     )
 
@@ -1065,6 +1107,24 @@ async def dealer_renew_choose(cb: CallbackQuery, state: FSMContext) -> None:
     d = await dealer_by_chat(cb.from_user.id)
     if not d:
         return
+    async with SessionLocal() as session:
+        it = await session.get(Item, item_id)
+    if not it or it.dealer != d.code:
+        await cb.message.answer("Запись не найдена среди ваших клиентов.")
+        return
+    await state.update_data(item_id=it.id)
+    await state.set_state(DealerRenewStates.waiting_comment)
+    await cb.message.answer(_dealer_renew_comment_prompt(it))
+
+
+@dealer_router.callback_query(F.data.startswith("drnexp:"))
+async def dealer_renew_from_expired(cb: CallbackQuery, state: FSMContext) -> None:
+    """Быстрое продление из списка просроченных (дилер)."""
+    await cb.answer()
+    d = await dealer_by_chat(cb.from_user.id)
+    if not d:
+        return
+    item_id = int(cb.data.split(":")[1])
     async with SessionLocal() as session:
         it = await session.get(Item, item_id)
     if not it or it.dealer != d.code:
