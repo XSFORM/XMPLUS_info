@@ -358,7 +358,7 @@ async def git_pull_start(message: Message) -> None:
     ]])
     await message.answer(
         "Выполнить git pull + пересборку Docker?\n"
-        "Бот перезапустится после сборки.",
+        "Бот перезапустится через пару секунд.",
         reply_markup=kb,
     )
 
@@ -400,32 +400,16 @@ async def deploy_confirm(cb: CallbackQuery, bot: Bot) -> None:
         )
 
         if proc.returncode != 0:
-            await cb.message.answer("❌ git pull завершился с ошибкой. Пересборка отменена.")
+            await cb.message.answer("❌ git pull завершился с ошибкой.")
             return
 
-        await cb.message.answer(
-            "🔨 Запускаю пересборку Docker... Бот перезапустится через ~30-60 сек."
-        )
+        await cb.message.answer("🔄 Перезапуск бота...")
+        await asyncio.sleep(0.5)  # дать Telegram доставить сообщение
 
-        # Пересборку запускаем в ОТДЕЛЬНОМ контейнере-deployer,
-        # иначе docker compose убивает текущий контейнер вместе
-        # с процессом compose и новый контейнер не стартует.
-        compose_file = f"{project_dir}/docker-compose.yml"
-        subprocess.run(
-            ["docker", "rm", "-f", "xmplus-deployer"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        # Код уже обновлён (volume mount .:/app),
+        # достаточно перезапустить контейнер — 2-3 сек.
         subprocess.Popen(
-            [
-                "docker", "run", "--rm", "-d",
-                "--name", "xmplus-deployer",
-                "-v", "/var/run/docker.sock:/var/run/docker.sock",
-                "-v", f"{project_dir}:{project_dir}",
-                "xmplus-xmplus:latest",
-                "sh", "-c",
-                f"sleep 2 && docker compose -f {compose_file} up -d --build",
-            ],
+            ["docker", "restart", "-t", "2", "xmplus"],
             start_new_session=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
