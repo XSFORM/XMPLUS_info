@@ -49,7 +49,8 @@ async def renew_start(message: Message, state: FSMContext) -> None:
     if expired:
         buttons = []
         for it in expired[:30]:
-            label = f"{it.user_id} • {it.username or '—'} • {fmt_dt_human(it.due_date)}"
+            name = it.note or it.username or "—"
+            label = f"ID {it.user_id} • {name}"
             buttons.append([InlineKeyboardButton(
                 text=label, callback_data=f"rnexp:{it.id}"
             )])
