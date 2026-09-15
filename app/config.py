@@ -20,6 +20,9 @@ class Settings:
     NOTIFY_EVERY_MINUTES: int = int(os.getenv("NOTIFY_EVERY_MINUTES", "180"))
     MAX_NOTIFICATIONS: int = int(os.getenv("MAX_NOTIFICATIONS", "2"))
 
+    # Путь к проекту на хосте (для git pull + docker rebuild из бота)
+    PROJECT_DIR: str = os.getenv("PROJECT_DIR", "/opt/xmplus")
+
     # База данных
     # Админ-бот: sqlite+aiosqlite:///./data/data.db
     # Дилер-бот (read-only): sqlite+aiosqlite:///file:/app/data/data.db?mode=ro&uri=true

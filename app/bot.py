@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+import subprocess
 
 from datetime import datetime, timezone, timedelta
 import csv, io, html, json, os, re, calendar, zipfile, shutil
@@ -345,6 +347,75 @@ def tz_switch_kb() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="GMT+8 • Singapore", callback_data="tz:set:Asia/Singapore"),
         ]
     ])
+
+# ---- Git Pull + Docker Rebuild ----
+
+@_admin.message(F.text == "⬇️ Git Pull")
+async def git_pull_start(message: Message) -> None:
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Да, обновить", callback_data="deploy:confirm"),
+        InlineKeyboardButton(text="❌ Отмена", callback_data="deploy:cancel"),
+    ]])
+    await message.answer(
+        "Выполнить git pull + пересборку Docker?\n"
+        "Бот перезапустится после сборки.",
+        reply_markup=kb,
+    )
+
+
+@_admin.callback_query(F.data == "deploy:cancel")
+async def deploy_cancel(cb: CallbackQuery) -> None:
+    await cb.answer()
+    await cb.message.answer("Отменено.", reply_markup=main_menu_kb())
+
+
+@_admin.callback_query(F.data == "deploy:confirm")
+async def deploy_confirm(cb: CallbackQuery, bot: Bot) -> None:
+    await cb.answer()
+    project_dir = settings.PROJECT_DIR
+
+    await cb.message.answer("⏳ git checkout + pull...")
+
+    try:
+        # git checkout -- . (сброс локальных изменений)
+        proc = await asyncio.create_subprocess_exec(
+            "git", "-C", project_dir, "checkout", "--", ".",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        await proc.communicate()
+
+        # git pull
+        proc = await asyncio.create_subprocess_exec(
+            "git", "-C", project_dir, "pull",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        out, _ = await proc.communicate()
+        pull_text = out.decode(errors="replace").strip() or "(пусто)"
+
+        await cb.message.answer(
+            f"📥 git pull:\n<pre>{html.escape(pull_text)}</pre>",
+            parse_mode="HTML",
+        )
+
+        if proc.returncode != 0:
+            await cb.message.answer("❌ git pull завершился с ошибкой. Пересборка отменена.")
+            return
+
+        await cb.message.answer("🔨 Запускаю пересборку Docker... Бот перезапустится через ~30 сек.")
+
+        # Запускаем rebuild в фоне — текущий контейнер будет заменён
+        subprocess.Popen(
+            ["docker", "compose", "-f", f"{project_dir}/docker-compose.yml", "up", "-d", "--build"],
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception as e:
+        log.exception("deploy error")
+        await cb.message.answer(f"❌ Ошибка: {html.escape(str(e))}")
+
 
 @_admin.message(Command("timezone"))
 @_admin.message(F.text.in_(["/timezone", "🌐 Часовой пояс"]))
