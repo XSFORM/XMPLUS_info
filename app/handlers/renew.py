@@ -36,7 +36,64 @@ def add_months(dt: datetime, months: int = 1) -> datetime:
 async def renew_start(message: Message, state: FSMContext) -> None:
     await state.clear()
     await state.set_state(RenewStates.waiting_userid)
-    await message.answer("Укажи USERID клиента, которого нужно продлить:")
+
+    # Показать просроченных для быстрого выбора
+    now = now_tz()
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(Item).order_by(Item.due_date.asc())
+        )
+        items = result.scalars().all()
+    expired = [it for it in items if to_tz(it.due_date) <= now]
+
+    if expired:
+        buttons = []
+        for it in expired[:30]:
+            label = f"{it.user_id} • {it.username or '—'} • {fmt_dt_human(it.due_date)}"
+            buttons.append([InlineKeyboardButton(
+                text=label, callback_data=f"rnexp:{it.id}"
+            )])
+        kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+        tail = f"\n(показаны первые 30 из {len(expired)})" if len(expired) > 30 else ""
+        await message.answer(
+            f"⛔ Просроченные ({len(expired)}):{tail}\n"
+            "Нажмите для быстрого продления:",
+            reply_markup=kb,
+        )
+
+    await message.answer("Или введите USERID клиента вручную:")
+
+
+@router.callback_query(F.data.startswith("rnexp:"))
+async def renew_from_expired(cb: CallbackQuery, state: FSMContext) -> None:
+    """Быстрое продление из списка просроченных."""
+    await cb.answer()
+    try:
+        item_id = int(cb.data.split(":")[1])
+    except Exception:
+        return
+    async with SessionLocal() as session:
+        it = await session.get(Item, item_id)
+    if not it:
+        await cb.message.answer("Запись не найдена. Попробуйте /renew.")
+        return
+    await state.update_data(
+        item_id=it.id, user_id=it.user_id,
+        username=it.username, old_due=fmt_dt_human(it.due_date),
+    )
+    await state.set_state(RenewStates.waiting_new_due)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Подставить текущую", callback_data=f"renew:prefill:current:{it.id}")],
+        [InlineKeyboardButton(text="Подставить +1 месяц", callback_data=f"renew:prefill:plus1m:{it.id}")],
+    ])
+    await cb.message.answer(
+        "Клиент:\n"
+        f"USERID: {it.user_id}\n"
+        f"USERNAME: {it.username}\n"
+        f"Текущая дата отключения: {fmt_dt_human(it.due_date)}",
+        reply_markup=kb,
+    )
+    await cb.message.answer("Отправьте новую дату в формате:\nYYYY-MM-DD HH:MM:SS")
 
 @router.message(RenewStates.waiting_userid)
 async def renew_find_by_userid(message: Message, state: FSMContext) -> None:
