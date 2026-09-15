@@ -47,23 +47,32 @@ async def renew_start(message: Message, state: FSMContext) -> None:
     expired = [it for it in items if to_tz(it.due_date) <= now]
 
     if expired:
-        # Вычислить ширину колонок для ровного отображения
-        max_uid = max(len(str(it.user_id)) for it in expired[:30])
-        max_uname = max(len(it.username or "") for it in expired[:30])
+        show = expired[:30]
+        # Ровная таблица в <pre> + кнопки для быстрого выбора
+        w_uid = max(len(str(it.user_id)) for it in show)
+        w_un = max(len(it.username or "") for it in show)
+        w_cl = max(len(it.note or "") for it in show)
+        rows = []
         buttons = []
-        for it in expired[:30]:
-            uid = str(it.user_id).ljust(max_uid)
-            uname = (it.username or "").ljust(max_uname)
-            client = it.note or ""
-            label = f"{uid} | {uname} | {client}" if client else f"{uid} | {uname}"
+        for it in show:
+            uid = str(it.user_id).ljust(w_uid)
+            un = (it.username or "").ljust(w_un)
+            cl = (it.note or "").ljust(w_cl)
+            rows.append(f"{uid} | {un} | {cl}")
+            # Кнопка — компактная, без выравнивания
+            btn_name = it.note or it.username or "—"
             buttons.append([InlineKeyboardButton(
-                text=label, callback_data=f"rnexp:{it.id}"
+                text=f"🔄 {it.user_id} • {btn_name}",
+                callback_data=f"rnexp:{it.id}",
             )])
+        table = "\n".join(rows)
+        tail = f"\n(первые 30 из {len(expired)})" if len(expired) > 30 else ""
         kb = InlineKeyboardMarkup(inline_keyboard=buttons)
-        tail = f"\n(показаны первые 30 из {len(expired)})" if len(expired) > 30 else ""
         await message.answer(
             f"⛔ Просроченные ({len(expired)}):{tail}\n"
-            "Нажмите для быстрого продления:",
+            f"<pre>{html.escape(table)}</pre>\n"
+            "Нажмите для продления:",
+            parse_mode="HTML",
             reply_markup=kb,
         )
 
