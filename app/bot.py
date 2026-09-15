@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import subprocess
+
 
 from datetime import datetime, timezone, timedelta
-import csv, io, html, json, os, re, calendar, zipfile, shutil
+import csv, io, html, json, os, re, signal, calendar, zipfile, shutil
 from pathlib import Path
 from typing import List
 
@@ -406,14 +406,9 @@ async def deploy_confirm(cb: CallbackQuery, bot: Bot) -> None:
         await cb.message.answer("🔄 Перезапуск бота...")
         await asyncio.sleep(0.5)  # дать Telegram доставить сообщение
 
-        # Код уже обновлён (volume mount .:/app),
-        # достаточно перезапустить контейнер — 2-3 сек.
-        subprocess.Popen(
-            ["docker", "restart", "-t", "2", "xmplus"],
-            start_new_session=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        # Код уже обновлён (volume mount .:/app).
+        # Убиваем процесс — Docker restart:always перезапустит.
+        os.kill(os.getpid(), signal.SIGTERM)
     except Exception as e:
         log.exception("deploy error")
         await cb.message.answer(f"❌ Ошибка: {html.escape(str(e))}")
