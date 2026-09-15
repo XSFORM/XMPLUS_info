@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from aiogram import Router, F
 from aiogram.filters import Command
@@ -83,7 +83,10 @@ def router_menu_kb() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="✏️ Изменить", callback_data="rt:edit"),
         ],
         [
+            InlineKeyboardButton(text="⏰ Ближайшие", callback_data="rt:next"),
             InlineKeyboardButton(text="⛔ Отключённые", callback_data="rt:disabled"),
+        ],
+        [
             InlineKeyboardButton(text="🗑 Удалить", callback_data="rt:delete"),
         ],
         [InlineKeyboardButton(text="◀ Главное меню", callback_data="rt:back")],
@@ -218,6 +221,30 @@ async def rt_disabled(cb: CallbackQuery) -> None:
     for ch in chunks:
         await send_pre_chunk(cb.message, ch)
     await cb.message.answer(f"Отключённых: {len(expired)}", reply_markup=router_menu_kb())
+
+
+# ---- Ближайшие роутеры (до 3 дней) ----
+
+@router.callback_query(F.data == "rt:next")
+async def rt_next(cb: CallbackQuery) -> None:
+    await cb.answer()
+    now = now_tz()
+    end = now + timedelta(days=3)
+    async with SessionLocal() as session:
+        items = (await session.execute(
+            select(RouterItem).order_by(RouterItem.due_date.asc())
+        )).scalars().all()
+    window = [it for it in items if now < to_tz(it.due_date) <= end]
+    if not window:
+        await cb.message.answer("📡 Нет истечений роутеров в ближайшие 3 дня.", reply_markup=router_menu_kb())
+        return
+    header, rows = _rt_table_lines(window)
+    chunks = split_text_chunks(
+        f"⏰ Ближайшие роутеры ({len(window)}):\n{header}\n{'─' * len(header)}", rows
+    )
+    for ch in chunks:
+        await send_pre_chunk(cb.message, ch)
+    await cb.message.answer(f"Ближайших: {len(window)}", reply_markup=router_menu_kb())
 
 
 # ---- Продлить роутер ----

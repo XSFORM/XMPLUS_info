@@ -403,11 +403,29 @@ async def deploy_confirm(cb: CallbackQuery, bot: Bot) -> None:
             await cb.message.answer("❌ git pull завершился с ошибкой. Пересборка отменена.")
             return
 
-        await cb.message.answer("🔨 Запускаю пересборку Docker... Бот перезапустится через ~30 сек.")
+        await cb.message.answer(
+            "🔨 Запускаю пересборку Docker... Бот перезапустится через ~30-60 сек."
+        )
 
-        # Запускаем rebuild в фоне — текущий контейнер будет заменён
+        # Пересборку запускаем в ОТДЕЛЬНОМ контейнере-deployer,
+        # иначе docker compose убивает текущий контейнер вместе
+        # с процессом compose и новый контейнер не стартует.
+        compose_file = f"{project_dir}/docker-compose.yml"
+        subprocess.run(
+            ["docker", "rm", "-f", "xmplus-deployer"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
         subprocess.Popen(
-            ["docker", "compose", "-f", f"{project_dir}/docker-compose.yml", "up", "-d", "--build"],
+            [
+                "docker", "run", "--rm", "-d",
+                "--name", "xmplus-deployer",
+                "-v", "/var/run/docker.sock:/var/run/docker.sock",
+                "-v", f"{project_dir}:{project_dir}",
+                "xmplus-xmplus:latest",
+                "sh", "-c",
+                f"sleep 2 && docker compose -f {compose_file} up -d --build",
+            ],
             start_new_session=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
