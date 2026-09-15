@@ -59,10 +59,14 @@ async def renew_start(message: Message, state: FSMContext) -> None:
             un = (it.username or "").ljust(w_un)
             cl = (it.note or "").ljust(w_cl)
             rows.append(f"{uid} | {un} | {cl}")
-            # Кнопка — компактная, без выравнивания
-            btn_name = it.note or it.username or "—"
+            # Кнопка — компактная
+            btn_parts = [f"🔄 {it.user_id}"]
+            if it.username:
+                btn_parts.append(it.username)
+            if it.note:
+                btn_parts.append(it.note)
             buttons.append([InlineKeyboardButton(
-                text=f"🔄 {it.user_id} • {btn_name}",
+                text=" • ".join(btn_parts),
                 callback_data=f"rnexp:{it.id}",
             )])
         table = "\n".join(rows)

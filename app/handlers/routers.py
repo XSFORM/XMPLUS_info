@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import logging
+import html, logging
 from datetime import datetime, timedelta
 
 from aiogram import Router, F
@@ -253,7 +253,44 @@ async def rt_next(cb: CallbackQuery) -> None:
 async def rt_renew_start(cb: CallbackQuery, state: FSMContext) -> None:
     await cb.answer()
     await state.set_state(RouterRenewStates.waiting_search)
-    await cb.message.answer("🔄 Продлить роутер\n\nВведите имя клиента для поиска:")
+
+    # Показать просроченных для быстрого выбора
+    now = now_tz()
+    async with SessionLocal() as session:
+        items = (await session.execute(
+            select(RouterItem).order_by(RouterItem.due_date.asc())
+        )).scalars().all()
+    expired = [it for it in items if to_tz(it.due_date) <= now]
+
+    if expired:
+        show = expired[:30]
+        w_name = max(len(it.client_name or "") for it in show)
+        w_note = max(len(it.note or "") for it in show)
+        rows = []
+        buttons = []
+        for it in show:
+            name = (it.client_name or "").ljust(w_name)
+            note = (it.note or "").ljust(w_note)
+            rows.append(f"{name} | {note} | {fmt_dt_human(it.due_date)}")
+            btn_parts = [f"🔄 {it.client_name}"]
+            if it.note:
+                btn_parts.append(it.note)
+            buttons.append([InlineKeyboardButton(
+                text=" • ".join(btn_parts),
+                callback_data=f"rtexp:{it.id}",
+            )])
+        table = "\n".join(rows)
+        tail = f"\n(первые 30 из {len(expired)})" if len(expired) > 30 else ""
+        kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await cb.message.answer(
+            f"⛔ Просроченные роутеры ({len(expired)}):{tail}\n"
+            f"<pre>{html.escape(table)}</pre>\n"
+            "Нажмите для продления:",
+            parse_mode="HTML",
+            reply_markup=kb,
+        )
+
+    await cb.message.answer("Или введите имя клиента для поиска:")
 
 
 @router.message(RouterRenewStates.waiting_search)
@@ -326,6 +363,32 @@ async def rt_renew_pick(cb: CallbackQuery, state: FSMContext) -> None:
         reply_markup=kb,
     )
 
+
+
+@router.callback_query(F.data.startswith("rtexp:"))
+async def rt_renew_from_expired(cb: CallbackQuery, state: FSMContext) -> None:
+    """Быстрое продление из списка просроченных роутеров."""
+    await cb.answer()
+    item_id = int(cb.data.split(":")[1])
+    async with SessionLocal() as session:
+        it = (await session.execute(select(RouterItem).where(RouterItem.id == item_id))).scalars().first()
+    if not it:
+        await cb.message.answer("Запись не найдена.", reply_markup=router_menu_kb())
+        return
+    await state.set_state(RouterRenewStates.waiting_due)
+    await state.update_data(rt_renew_id=it.id)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Подставить текущую", callback_data=f"rt:rnpre:cur:{it.id}")],
+        [InlineKeyboardButton(text="Подставить +1 месяц", callback_data=f"rt:rnpre:p1m:{it.id}")],
+    ])
+    tz = get_active_timezone_name()
+    await cb.message.answer(
+        f"📋 {_rt_card(it)}\n\n"
+        f"Текущая дата: {fmt_dt_human(it.due_date)}\n\n"
+        f"Введите новую дату ({tz}):\n"
+        "Формат: YYYY-MM-DD HH:MM:SS",
+        reply_markup=kb,
+    )
 
 
 @router.callback_query(F.data.startswith("rt:rnpre:"))
