@@ -30,6 +30,7 @@ router = Router()
 
 SKIP = ("-", "—")
 NAME_W = 16
+NOTE_W = 22
 
 
 def services_menu_kb() -> InlineKeyboardMarkup:
@@ -100,13 +101,19 @@ async def _get(svc_id: int) -> Service | None:
 
 def _table(items: list[Service]) -> tuple[str, list[str]]:
     today = now_tz().date()
-    header = f"{'СЕРВИС'.ljust(NAME_W)} | ПЕРИОД | ОПЛАТА     | ДНЕЙ | СУММА"
+    amounts = [fmt_amount(s.amount, s.currency) for s in items]
+    w_am = max([len("СУММА")] + [len(a) for a in amounts])
+    header = (
+        f"{'СЕРВИС'.ljust(NAME_W)} | ПЕРИОД | ОПЛАТА     | ДНЕЙ | "
+        f"{'СУММА'.ljust(w_am)} | ЗАМЕТКА"
+    )
     rows = []
-    for s in items:
+    for s, am in zip(items, amounts):
         days = (s.due_date - today).days
         rows.append(
             f"{_trunc(s.name, NAME_W).ljust(NAME_W)} | {period_short(s.period_months, s.period_days).ljust(6)} | "
-            f"{s.due_date.isoformat()} | {str(days).rjust(4)} | {fmt_amount(s.amount, s.currency)}"
+            f"{s.due_date.isoformat()} | {str(days).rjust(4)} | {am.ljust(w_am)} | "
+            f"{_trunc(s.note or '', NOTE_W)}"
         )
     return header, rows
 
@@ -129,8 +136,9 @@ def _pick_kb(items: list[Service], prefix: str) -> InlineKeyboardMarkup:
     rows = []
     for s in items[:40]:
         days = (s.due_date - today).days
+        note = f" • {_trunc(s.note, NOTE_W)}" if s.note else ""
         rows.append([InlineKeyboardButton(
-            text=f"{s.name} • {s.due_date.isoformat()} ({days_left_text(days)})",
+            text=f"{s.name}{note} • {s.due_date.strftime('%d.%m')} ({days_left_text(days)})",
             callback_data=f"{prefix}:{s.id}",
         )])
     rows.append([InlineKeyboardButton(text="◀ Назад", callback_data="svc:menu")])
@@ -321,7 +329,7 @@ async def svc_add_note(message: Message, state: FSMContext) -> None:
     days = (s.due_date - now_tz().date()).days
     await message.answer(
         f"✅ Сервис добавлен\n\n{svc_card(s)}\n\n"
-        f"До оплаты: {days_left_text(days)}. {_remind_text(s)}",
+        f"До оплаты: {days_left_text(days)}\n{_remind_text(s)}",
         reply_markup=services_menu_kb(),
     )
 
