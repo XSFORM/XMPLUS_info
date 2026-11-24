@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import logging
 import re
 from collections import defaultdict
@@ -22,6 +23,7 @@ from app.pricing import (
     fmt_money, log_client_income,
 )
 from app.services_util import period_len_days
+from app.bot import _trunc
 
 log = logging.getLogger(__name__)
 
@@ -257,6 +259,7 @@ def _local(dt: datetime, naive_is_utc: bool) -> datetime:
 
 
 async def build_report(month: str | None = None) -> str:
+    """Отчёт в виде моноширинной таблицы (<pre>) — колонки выровнены по вертикали."""
     now = now_tz()
     month = month or now.strftime("%Y-%m")
     cats = await categories_map()
@@ -271,11 +274,30 @@ async def build_report(month: str | None = None) -> str:
             select(BalanceTxn).where(BalanceTxn.kind.in_(["renewal", "order", "payment"]))
         )).scalars().all()
 
+    # out: ("text", строка) | ("row", метка, середина, сумма) | ("sep",)
+    out: list[tuple] = []
+    text = lambda s: out.append(("text", s))
+    row = lambda a, b, c: out.append(("row", a, b, c))
+    sep = lambda: out.append(("sep",))
+    signed = lambda v, c: ("+" if v > 0 else "−" if v < 0 else "") + fmt_money(abs(v), c)
+
+    def totals_rows(label: str, totals: dict[str, float]) -> None:
+        vals = [(c, v) for c, v in totals.items() if abs(v) > 1e-9]
+        vals.sort(key=lambda x: (x[0] != DEFAULT_CURRENCY, x[0]))
+        if not vals:
+            row(label, "", "0")
+        for i, (c, v) in enumerate(vals):
+            row(label if i == 0 else "", "", signed(v, c))
+
+    def qty(price: float | None, n: int) -> str:
+        """«  250 ×  27» — цена и количество в своих колонках."""
+        p = fmt_money(price, "").strip() if price is not None else ""
+        return f"{p.rjust(5)} × {str(n).rjust(3)}"
+
     expected: dict[str, float] = defaultdict(float)
-    lines = ["📊 Доходы", "", "📈 Ожидаемо в месяц (по активным клиентам):"]
 
     def block(title: str, objs) -> None:
-        groups: dict[tuple[str, float, str], int] = defaultdict(int)
+        groups: dict[tuple[str, float | None, str], list[float]] = defaultdict(list)
         unknown = 0
         subtotal: dict[str, float] = defaultdict(float)
         for o in objs:
@@ -283,35 +305,44 @@ async def build_report(month: str | None = None) -> str:
             if not p:
                 unknown += 1
                 continue
-            groups[(p[2], p[0], p[1])] += 1
+            custom = p[2] == "своя цена"
+            groups[("Своя цена" if custom else p[2], None if custom else p[0], p[1])].append(p[0])
             subtotal[p[1]] += p[0]
             expected[p[1]] += p[0]
-        total_s = " • ".join(fmt_money(v, c) for c, v in subtotal.items()) or "0"
-        lines.append(f"{title}: {total_s} ({len(objs)} шт.)")
-        for (label, price, cur), cnt in sorted(groups.items(), key=lambda x: -x[0][1]):
-            lines.append(f"   {label} {fmt_money(price, cur)} × {cnt} = {fmt_money(price * cnt, cur)}")
+        text(f"{title} ({len(objs)} шт.)")
+        order = sorted(groups.items(), key=lambda x: (x[0][1] is None, -(x[0][1] or 0)))
+        for (label, price, cur), prices in order:
+            mid = qty(price, len(prices))
+            row(f"  {_trunc(label, 10)}", mid, fmt_money(sum(prices), cur))
         if unknown:
-            lines.append(f"   ⚠️ без категории: {unknown} шт.")
+            row("  Без катег.", qty(None, unknown), "—")
+        for i, (c, v) in enumerate(sorted(subtotal.items())):
+            row("  = итого" if i == 0 else "", "", fmt_money(v, c))
+        if not subtotal:
+            row("  = итого", "", "0")
 
     active_own = [i for i in items if (i.dealer or MAIN_CODE) == MAIN_CODE and to_tz(i.due_date) > now]
     active_dealer = [i for i in items if (i.dealer or MAIN_CODE) != MAIN_CODE and to_tz(i.due_date) > now]
     active_rt = [r for r in routers if to_tz(r.due_date) > now]
-    block("🔑 Свои ключи", active_own)
-    block("📡 Роутеры", active_rt)
 
+    text("ОЖИДАЕМО В МЕСЯЦ")
+    text("")
+    block("Свои ключи", active_own)
+    text("")
+    block("Роутеры", active_rt)
+    text("")
     d_sum = len(active_dealer) * dealer_price
     expected["$"] += d_sum
-    lines.append(f"🤝 Дилеры: {len(active_dealer)} × {fmt_money(dealer_price, '$')} = {fmt_money(d_sum, '$')}")
-
+    row("Дилеры", qty(dealer_price, len(active_dealer)), fmt_money(d_sum, "$"))
     svc_exp: dict[str, float] = defaultdict(float)
     for s in services:
         if s.amount:
             svc_exp[s.currency] += s.amount * 30 / max(1, period_len_days(s.period_months, s.period_days))
-    if svc_exp:
-        for c, v in svc_exp.items():
-            expected[c] -= v
-        lines.append("🧾 Сервисы: " + " • ".join("−" + fmt_money(round(v, 2), c) for c, v in svc_exp.items()))
-    lines.append(f"Итого: {_fmt_totals(expected)}")
+    for i, (c, v) in enumerate(sorted(svc_exp.items())):
+        expected[c] -= v
+        row("Сервисы" if i == 0 else "", "", "−" + fmt_money(round(v, 2), c))
+    sep()
+    totals_rows("ИТОГО", expected)
 
     # ---- Факт за месяц ----
     y, m = map(int, month.split("-"))
@@ -337,42 +368,66 @@ async def build_report(month: str | None = None) -> str:
             d_cnt += 1
     fact["$"] += d_accr
 
-    def money(src: str) -> str:
-        return " • ".join(fmt_money(abs(v), c) for c, v in by_src[src].items()) or "0"
+    def src_rows(label: str, src: str, minus: bool = False) -> None:
+        vals = sorted(by_src[src].items())
+        mid = f"{cnt_src[src]} опл."
+        if not vals:
+            row(label, mid, "0")
+        for i, (c, v) in enumerate(vals):
+            row(label if i == 0 else "", mid if i == 0 else "", ("−" if minus else "") + fmt_money(abs(v), c))
 
-    lines += ["", f"📅 Факт за {MONTHS_RU[m - 1]} {y}:"]
-    lines.append(f"🔑 Свои ключи: {money('key')} ({cnt_src['key']} опл.)")
-    lines.append(f"📡 Роутеры: {money('router')} ({cnt_src['router']} опл.)")
-    lines.append(f"🤝 Дилеры: начислено {fmt_money(d_accr, '$')} ({d_cnt}), получено {fmt_money(d_paid, '$')}")
-    if by_src["service"]:
-        lines.append(f"🧾 Сервисы: −{money('service')} ({cnt_src['service']} опл.)")
-    else:
-        lines.append("🧾 Сервисы: 0")
-    lines.append(f"Итого: {_fmt_totals(fact)}")
-    lines += ["", "ℹ️ Факт по ключам и роутерам копится с момента запуска этой функции "
-                  "(каждое продление записывается по категории клиента)."]
-    return "\n".join(lines)
+    text("")
+    text("")
+    text(f"ФАКТ: {MONTHS_RU[m - 1].upper()} {y}")
+    text("")
+    src_rows("Свои ключи", "key")
+    src_rows("Роутеры", "router")
+    row("Дилеры", f"{d_cnt} нач.", fmt_money(d_accr, "$"))
+    row("  получено", "", fmt_money(d_paid, "$"))
+    src_rows("Сервисы", "service", minus=True)
+    sep()
+    totals_rows("ИТОГО", fact)
+
+    # ---- Рендер с выравниванием ----
+    rows_ = [r for r in out if r[0] == "row"]
+    wl = max(len(r[1]) for r in rows_)
+    wm = max(len(r[2]) for r in rows_)
+    wt = max(len(r[3]) for r in rows_)
+    width = wl + wm + wt + 2
+    lines = []
+    for r in out:
+        if r[0] == "text":
+            lines.append(r[1])
+        elif r[0] == "sep":
+            lines.append("─" * width)
+        else:
+            lines.append(f"{r[1].ljust(wl)} {r[2].rjust(wm)} {r[3].rjust(wt)}".rstrip())
+    body = html.escape("\n".join(lines))
+    return (
+        f"📊 <b>Доходы</b>\n<pre>{body}</pre>\n"
+        "<i>Факт по своим ключам и роутерам копится с момента запуска функции.</i>"
+    )
 
 
 @router.message(Command("income"))
 @router.message(F.text.in_(["📊 Доходы", "/income"]))
 async def inc_home(message: Message, state: FSMContext) -> None:
     await state.clear()
-    await message.answer(await build_report(), reply_markup=_home_kb())
+    await message.answer(await build_report(), reply_markup=_home_kb(), parse_mode="HTML")
 
 
 @router.callback_query(F.data == "inc:home")
 async def inc_home_cb(cb: CallbackQuery, state: FSMContext) -> None:
     await cb.answer()
     await state.clear()
-    await cb.message.answer(await build_report(), reply_markup=_home_kb())
+    await cb.message.answer(await build_report(), reply_markup=_home_kb(), parse_mode="HTML")
 
 
 @router.callback_query(F.data.startswith("inc:m:"))
 async def inc_month(cb: CallbackQuery) -> None:
     await cb.answer()
     month = cb.data.split(":")[2]
-    await cb.message.answer(await build_report(month), reply_markup=_home_kb(month))
+    await cb.message.answer(await build_report(month), reply_markup=_home_kb(month), parse_mode="HTML")
 
 
 # ---------------------------------------------------------------------
