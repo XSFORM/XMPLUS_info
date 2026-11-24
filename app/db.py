@@ -69,6 +69,8 @@ class Service(Base):
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     # Период в месяцах: 1 — ежемесячно, 12 — ежегодно и т.д.
     period_months: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    # Период в днях (если > 0 — используется вместо месяцев): 7, 10 и т.д.
+    period_days: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     # Дата следующей оплаты
     due_date: Mapped[date] = mapped_column(Date, nullable=False)
     # «Якорный» день месяца — чтобы 31-е не съезжало на 28-е навсегда
@@ -191,6 +193,13 @@ def _migrate_schema(conn) -> None:
         if rows and "note" not in cols:
             conn.exec_driver_sql(
                 "ALTER TABLE items ADD COLUMN note TEXT DEFAULT ''"
+            )
+        # services.period_days
+        rows = conn.exec_driver_sql("PRAGMA table_info(services)").fetchall()
+        cols = {r[1] for r in rows}
+        if rows and "period_days" not in cols:
+            conn.exec_driver_sql(
+                "ALTER TABLE services ADD COLUMN period_days INTEGER NOT NULL DEFAULT 0"
             )
         # payments.variant
         rows = conn.exec_driver_sql("PRAGMA table_info(payments)").fetchall()

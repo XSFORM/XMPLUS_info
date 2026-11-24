@@ -16,8 +16,8 @@ from app.states import ServiceAddStates, ServiceEditStates
 from app.utils import now_tz
 from app.bot import _trunc, split_text_chunks, send_pre_chunk
 from app.services_util import (
-    period_label, period_short, shift_months, fmt_amount, parse_amount_currency,
-    parse_date_simple, days_left_text, svc_card,
+    period_label, period_short, period_len_days, parse_period, next_due, fmt_amount,
+    parse_amount_currency, parse_date_simple, days_left_text, svc_card, remind_days,
 )
 
 log = logging.getLogger(__name__)
@@ -57,11 +57,33 @@ def period_kb(prefix: str) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="Ежегодно", callback_data=f"{prefix}:12"),
         ],
         [
+            InlineKeyboardButton(text="7 дней", callback_data=f"{prefix}:d7"),
             InlineKeyboardButton(text="3 мес", callback_data=f"{prefix}:3"),
             InlineKeyboardButton(text="6 мес", callback_data=f"{prefix}:6"),
-            InlineKeyboardButton(text="Другое", callback_data=f"{prefix}:custom"),
         ],
+        [InlineKeyboardButton(text="Другое (дни или месяцы)", callback_data=f"{prefix}:custom")],
     ])
+
+
+CUSTOM_PERIOD_HINT = (
+    "Введите период:\n"
+    "• в днях — «10д» (каждые 10 дней), «1д» — ежедневно\n"
+    "• в месяцах — просто число, например «2» или «24»"
+)
+CUSTOM_PERIOD_ERR = "Не понял период. Пример: «10д» — каждые 10 дней, «2» — раз в 2 месяца."
+
+
+def _decode_period(val: str) -> tuple[int, int]:
+    """Токен из кнопки: «d7» → (0, 7) дней, «12» → (12, 0) месяцев."""
+    return (0, int(val[1:])) if val.startswith("d") else (int(val), 0)
+
+
+def _remind_text(s: Service) -> str:
+    days = remind_days(s)
+    before = [d for d in days if d > 0]
+    if not before:
+        return "Напомню в день оплаты."
+    return f"Напомню за {', '.join(map(str, before))} дн. и в день оплаты."
 
 
 async def _all_services() -> list[Service]:
@@ -83,7 +105,7 @@ def _table(items: list[Service]) -> tuple[str, list[str]]:
     for s in items:
         days = (s.due_date - today).days
         rows.append(
-            f"{_trunc(s.name, NAME_W).ljust(NAME_W)} | {period_short(s.period_months).ljust(6)} | "
+            f"{_trunc(s.name, NAME_W).ljust(NAME_W)} | {period_short(s.period_months, s.period_days).ljust(6)} | "
             f"{s.due_date.isoformat()} | {str(days).rjust(4)} | {fmt_amount(s.amount, s.currency)}"
         )
     return header, rows
@@ -93,7 +115,7 @@ def _totals(items: list[Service]) -> str:
     monthly: dict[str, float] = defaultdict(float)
     for s in items:
         if s.amount:
-            monthly[s.currency] += s.amount / max(1, s.period_months)
+            monthly[s.currency] += s.amount * 30 / max(1, period_len_days(s.period_months, s.period_days))
     if not monthly:
         return ""
     lines = ["💵 Расходы в среднем:"]
@@ -210,25 +232,25 @@ async def svc_add_period(cb: CallbackQuery, state: FSMContext) -> None:
     val = cb.data.split(":")[1]
     if val == "custom":
         await state.set_state(ServiceAddStates.waiting_period_custom)
-        await cb.message.answer("Введите период в месяцах (например 2 или 24):")
+        await cb.message.answer(CUSTOM_PERIOD_HINT)
         return
-    await _ask_due(cb.message, state, int(val))
+    await _ask_due(cb.message, state, *_decode_period(val))
 
 
 @router.message(ServiceAddStates.waiting_period_custom)
 async def svc_add_period_custom(message: Message, state: FSMContext) -> None:
-    t = (message.text or "").strip()
-    if not t.isdigit() or not (1 <= int(t) <= 120):
-        await message.answer("Нужно число месяцев от 1 до 120:")
+    parsed = parse_period(message.text or "")
+    if not parsed:
+        await message.answer(CUSTOM_PERIOD_ERR)
         return
-    await _ask_due(message, state, int(t))
+    await _ask_due(message, state, *parsed)
 
 
-async def _ask_due(message: Message, state: FSMContext, months: int) -> None:
-    await state.update_data(period=months)
+async def _ask_due(message: Message, state: FSMContext, months: int, days: int = 0) -> None:
+    await state.update_data(period=months, period_days=days)
     await state.set_state(ServiceAddStates.waiting_due)
     await message.answer(
-        f"Период: {period_label(months)}\n\n"
+        f"Период: {period_label(months, days)}\n\n"
         "Шаг 3/6. Дата следующей оплаты:\n"
         "Формат: 2026-12-05, 05.12.2026 или просто 05.12"
     )
@@ -285,6 +307,7 @@ async def svc_add_note(message: Message, state: FSMContext) -> None:
         s = Service(
             name=data["name"],
             period_months=int(data["period"]),
+            period_days=int(data.get("period_days") or 0),
             due_date=due,
             billing_day=due.day,
             amount=float(data.get("amount") or 0),
@@ -298,7 +321,7 @@ async def svc_add_note(message: Message, state: FSMContext) -> None:
     days = (s.due_date - now_tz().date()).days
     await message.answer(
         f"✅ Сервис добавлен\n\n{svc_card(s)}\n\n"
-        f"До оплаты: {days_left_text(days)}. Напомню за 7, 3, 1 день и в день оплаты.",
+        f"До оплаты: {days_left_text(days)}. {_remind_text(s)}",
         reply_markup=services_menu_kb(),
     )
 
@@ -324,7 +347,7 @@ async def svc_paid(cb: CallbackQuery) -> None:
             await cb.answer("Сервис не найден", show_alert=True)
             return
         old = s.due_date
-        s.due_date = shift_months(old, s.period_months, s.billing_day)
+        s.due_date = next_due(s)
         s.last_paid_on = now_tz().date()
         s.snooze_date = None
         await session.commit()
@@ -442,9 +465,9 @@ async def svc_edit_period(cb: CallbackQuery, state: FSMContext) -> None:
     if val == "custom":
         await state.set_state(ServiceEditStates.waiting_value)
         await state.update_data(svc_id=sid, field="period")
-        await cb.message.answer("Введите период в месяцах (например 2 или 24):")
+        await cb.message.answer(CUSTOM_PERIOD_HINT)
         return
-    await _save_field(cb.message, state, sid, "period", int(val))
+    await _save_field(cb.message, state, sid, "period", _decode_period(val))
 
 
 @router.message(ServiceEditStates.waiting_value)
@@ -459,10 +482,10 @@ async def svc_edit_value(message: Message, state: FSMContext) -> None:
             return
         value = t[:128]
     elif field == "period":
-        if not t.isdigit() or not (1 <= int(t) <= 120):
-            await message.answer("Нужно число месяцев от 1 до 120:")
+        value = parse_period(t)
+        if not value:
+            await message.answer(CUSTOM_PERIOD_ERR)
             return
-        value = int(t)
     elif field == "due":
         value = parse_date_simple(t, now_tz().date())
         if not value:
@@ -497,7 +520,7 @@ async def _save_field(message: Message, state: FSMContext, sid: int, field: str,
         if field == "name":
             s.name = value
         elif field == "period":
-            s.period_months = value
+            s.period_months, s.period_days = value
         elif field == "due":
             s.due_date = value
             s.billing_day = value.day

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import calendar
 import re
-from datetime import date
+from datetime import date, timedelta
 
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
@@ -11,12 +11,48 @@ PERIOD_LABELS = {1: "ежемесячно", 3: "раз в 3 мес.", 6: "раз
 PERIOD_SHORT = {1: "мес", 3: "3 мес", 6: "6 мес", 12: "год", 24: "2 года"}
 
 
-def period_label(months: int) -> str:
+def period_label(months: int, days: int = 0) -> str:
+    if days:
+        return "ежедневно" if days == 1 else f"каждые {days} дн."
     return PERIOD_LABELS.get(months, f"раз в {months} мес.")
 
 
-def period_short(months: int) -> str:
+def period_short(months: int, days: int = 0) -> str:
+    if days:
+        return f"{days} дн"
     return PERIOD_SHORT.get(months, f"{months} мес")
+
+
+def period_len_days(months: int, days: int = 0) -> int:
+    """Примерная длина периода в днях (для итогов и графика напоминаний)."""
+    return days if days else months * 30
+
+
+def parse_period(text: str) -> tuple[int, int] | None:
+    """«7д», «7 дней», «7d» → (0, 7); «2», «2м», «2 мес» → (2, 0). Возвращает (месяцы, дни)."""
+    t = text.strip().lower().replace(" ", "")
+    m = re.fullmatch(r"(\d+)(д|дн|дня|дней|d|day|days)", t)
+    if m:
+        d = int(m.group(1))
+        return (0, d) if 1 <= d <= 366 else None
+    m = re.fullmatch(r"(\d+)(м|мес|месяц|месяца|месяцев|m)?", t)
+    if m:
+        mo = int(m.group(1))
+        return (mo, 0) if 1 <= mo <= 120 else None
+    return None
+
+
+def next_due(s) -> date:
+    """Следующая дата оплаты после текущей (по дням или по месяцам)."""
+    if getattr(s, "period_days", 0):
+        return s.due_date + timedelta(days=s.period_days)
+    return shift_months(s.due_date, s.period_months, s.billing_day)
+
+
+def remind_days(s) -> tuple[int, ...]:
+    """За сколько дней напоминать: 7, 3, 1, 0 — но не больше половины периода (для коротких)."""
+    half = period_len_days(s.period_months, getattr(s, "period_days", 0)) // 2
+    return tuple(d for d in (7, 3, 1, 0) if d <= max(half, 1))
 
 
 def shift_months(d: date, months: int, billing_day: int | None = None) -> date:
@@ -85,7 +121,7 @@ def svc_card(s) -> str:
     lines = [
         f"🧾 {s.name}",
         f"Сумма: {fmt_amount(s.amount, s.currency)}",
-        f"Оплата: {s.due_date.isoformat()} ({period_label(s.period_months)})",
+        f"Оплата: {s.due_date.isoformat()} ({period_label(s.period_months, s.period_days)})",
     ]
     if s.url:
         lines.append(f"Ссылка: {s.url}")

@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.db import SessionLocal, Item, RouterItem, Dealer, Service
-from app.services_util import svc_card, svc_notify_kb, days_left_text
+from app.services_util import svc_card, svc_notify_kb, days_left_text, remind_days
 from app.utils import now_tz, fmt_dt_human, tz_offset_str, to_tz
 
 log = logging.getLogger(__name__)
@@ -159,8 +159,8 @@ async def check_expiries(bot: Bot) -> None:
         await session.commit()
 
 
-# Напоминания об оплате сервисов: за 7, 3, 1 день, в день оплаты и каждый день после.
-SERVICE_REMIND_DAYS = (7, 3, 1, 0)
+# Напоминания об оплате сервисов: за 7, 3, 1 день (для коротких периодов — меньше),
+# в день оплаты и каждый день после. См. services_util.remind_days.
 
 
 async def check_services(bot: Bot) -> None:
@@ -187,7 +187,7 @@ async def check_services(bot: Bot) -> None:
                 continue
             days = (s.due_date - today).days
             snoozed = bool(s.snooze_date and s.snooze_date <= today_s)
-            if not (days in SERVICE_REMIND_DAYS or days < 0 or snoozed):
+            if not (days in remind_days(s) or days < 0 or snoozed):
                 continue
             if s.snooze_date and s.snooze_date > today_s:
                 continue  # отложено до завтра
