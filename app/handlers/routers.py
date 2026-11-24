@@ -16,6 +16,8 @@ from app.keyboards import main_menu_kb
 from app.utils import parse_datetime_human, fmt_dt_human, now_tz, to_tz, get_active_timezone_name
 from app.bot import _trunc, split_text_chunks, send_pre_chunk
 from app.handlers.renew import add_months
+from app.handlers.income import ask_category
+from app.pricing import log_client_income, price_for, fmt_money
 
 log = logging.getLogger(__name__)
 
@@ -60,6 +62,7 @@ def _rt_edit_kb(item_id: int) -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(text="✏️ Дата", callback_data=f"rte:f:{item_id}:due_date"),
+            InlineKeyboardButton(text="💰 Категория", callback_data=f"pcask:r:{item_id}"),
         ],
         [InlineKeyboardButton(text="◀ Назад", callback_data="rt:menu")],
     ])
@@ -173,12 +176,14 @@ async def rt_add_note(message: Message, state: FSMContext) -> None:
         item = RouterItem(client_name=client_name, due_date=due, note=note)
         session.add(item)
         await session.commit()
+        await session.refresh(item)
     await message.answer(
         f"✅ Роутер добавлен!\n\n"
         f"Клиент: {client_name}\n"
         f"DUE: {fmt_dt_human(due)}\n"
         + (f"Заметка: {note}" if note else ""),
     )
+    await ask_category(message, "r", item.id)
 
 
 # ---- Список роутеров ----
@@ -421,11 +426,12 @@ async def rt_renew_prefill(cb: CallbackQuery, state: FSMContext) -> None:
         item.last_notified_at = None
         await session.commit()
     await state.clear()
+    income = await log_client_income(item, "router", f"Продление: {item.client_name}")
     await cb.message.answer(
         f"✅ Роутер продлён!\n\n"
         f"Клиент: {it.client_name}\n"
         f"Было: {old_due}\n"
-        f"Стало: {fmt_dt_human(new_dt)}",
+        f"Стало: {fmt_dt_human(new_dt)}" + income,
     )
 
 
@@ -449,11 +455,12 @@ async def rt_renew_due(message: Message, state: FSMContext) -> None:
         it.notified_count = 0
         it.last_notified_at = None
         await session.commit()
+    income = await log_client_income(it, "router", f"Продление: {it.client_name}")
     await message.answer(
         f"✅ Роутер продлён!\n\n"
         f"Клиент: {it.client_name}\n"
         f"Было: {old_due}\n"
-        f"Стало: {fmt_dt_human(dt)}",
+        f"Стало: {fmt_dt_human(dt)}" + income,
     )
 
 
@@ -581,7 +588,9 @@ async def rt_edit_pick(cb: CallbackQuery) -> None:
     if not it:
         await cb.message.answer("Запись не найдена.", reply_markup=router_menu_kb())
         return
-    await cb.message.answer(f"📋 {_rt_card(it)}", reply_markup=_rt_edit_kb(it.id))
+    p = await price_for(it)
+    cat = f"\nКатегория: {p[2]} — {fmt_money(p[0], p[1])}" if p else "\nКатегория: не указана"
+    await cb.message.answer(f"📋 {_rt_card(it)}{cat}", reply_markup=_rt_edit_kb(it.id))
 
 
 @router.callback_query(F.data.startswith("rte:f:"))

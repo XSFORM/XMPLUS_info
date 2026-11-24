@@ -32,6 +32,7 @@ from app.states import (
     DealerRenewStates, DealerPayStates, OrderFulfillStates, RenewStates,
 )
 from app.keyboards import main_menu_kb, choose_by_due_kb, dealer_user_menu_kb
+from app.pricing import price_for, fmt_money
 from aiogram.fsm.context import FSMContext
 
 from sqlalchemy import select, delete, update
@@ -132,6 +133,7 @@ BOT_COMMANDS_ADMIN = [
     BotCommand(command="status", description="Статус бота"),
     BotCommand(command="backup", description="Бэкап базы данных"),
     BotCommand(command="services", description="Сервисы (VPS, домены) — напоминания об оплате"),
+    BotCommand(command="income", description="Доходы и расходы"),
     BotCommand(command="timezone", description="Показать/сменить локальное время (TZ)"),
     BotCommand(command="cancel", description="Отменить текущий ввод"),
     BotCommand(command="menu", description="Показать клавиатуру"),
@@ -479,6 +481,7 @@ def _edit_kb(item_id: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="\u270f\ufe0f \u041a\u043b\u0438\u0435\u043d\u0442", callback_data=f"edit:f:{item_id}:note"),
             InlineKeyboardButton(text="\u270f\ufe0f \u0414\u0430\u0442\u0430", callback_data=f"edit:f:{item_id}:due_date"),
         ],
+        [InlineKeyboardButton(text="💰 Категория", callback_data=f"pcask:k:{item_id}")],
         [InlineKeyboardButton(text="\u25c0 \u041d\u0430\u0437\u0430\u0434", callback_data="edit:back")],
     ])
 
@@ -551,8 +554,13 @@ async def edit_pick(cb: CallbackQuery) -> None:
     if not it:
         await cb.message.answer("\u0417\u0430\u043f\u0438\u0441\u044c \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u0430.")
         return
+    if (it.dealer or MAIN_CODE) == MAIN_CODE:
+        p = await price_for(it)
+        cat = f"\nКатегория: {p[2]} — {fmt_money(p[0], p[1])}" if p else "\nКатегория: не указана"
+    else:
+        cat = ""
     await cb.message.answer(
-        f"\U0001f4cb {_item_card(it)}",
+        f"\U0001f4cb {_item_card(it)}{cat}",
         reply_markup=_edit_kb(it.id),
     )
 

@@ -47,6 +47,9 @@ class Item(Base):
     max_notifications: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     notified_count: Mapped[int] = mapped_column(Integer, default=0)
     last_notified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Доход: категория цены или своя цена (в TMT)
+    category_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    custom_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
 
 class RouterItem(Base):
@@ -59,6 +62,34 @@ class RouterItem(Base):
     note: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, default="")
     notified_count: Mapped[int] = mapped_column(Integer, default=0)
     last_notified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    category_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    custom_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+
+class PriceCategory(Base):
+    """Категория цены клиента: «Коллеги — 150 TMT» (kind: key | router)."""
+    __tablename__ = "price_categories"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    price: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    currency: Mapped[str] = mapped_column(String(16), nullable=False, default="TMT")
+    sort: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class IncomeTxn(Base):
+    """Фактическое движение денег: продления ключей/роутеров (+), оплаты сервисов (−).
+    created_at хранится в ЛОКАЛЬНОМ времени (naive) — так его понимает to_tz()."""
+    __tablename__ = "income_txns"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    # key | router | service
+    source: Mapped[str] = mapped_column(String(16), nullable=False)
+    amount: Mapped[float] = mapped_column(Float, nullable=False)
+    currency: Mapped[str] = mapped_column(String(16), nullable=False, default="TMT")
+    comment: Mapped[str] = mapped_column(String(255), nullable=False, default="")
 
 
 class Service(Base):
@@ -194,6 +225,14 @@ def _migrate_schema(conn) -> None:
             conn.exec_driver_sql(
                 "ALTER TABLE items ADD COLUMN note TEXT DEFAULT ''"
             )
+        # items/routers: category_id, custom_price
+        for tbl in ("items", "routers"):
+            rows = conn.exec_driver_sql(f"PRAGMA table_info({tbl})").fetchall()
+            cols = {r[1] for r in rows}
+            if rows and "category_id" not in cols:
+                conn.exec_driver_sql(f"ALTER TABLE {tbl} ADD COLUMN category_id INTEGER")
+            if rows and "custom_price" not in cols:
+                conn.exec_driver_sql(f"ALTER TABLE {tbl} ADD COLUMN custom_price REAL")
         # services.period_days
         rows = conn.exec_driver_sql("PRAGMA table_info(services)").fetchall()
         cols = {r[1] for r in rows}
@@ -381,3 +420,25 @@ async def get_payment_variant(var_id: int) -> "PaymentVariant | None":
     """Вариант оплаты по id."""
     async with SessionLocal() as session:
         return await session.get(PaymentVariant, var_id)
+
+
+# ---- Категории цен (доходы) ----
+
+DEFAULT_PRICE_CATEGORIES = [
+    ("key", "Друзья", 0), ("key", "Коллеги", 150), ("key", "Знакомые", 200), ("key", "Чужие", 250),
+    ("router", "Свои", 0), ("router", "Коллеги", 500), ("router", "Знакомые", 800),
+]
+
+
+async def seed_price_categories() -> None:
+    """Первичное наполнение категорий цен. Вызывать только из admin-бота."""
+    try:
+        async with SessionLocal() as session:
+            if (await session.execute(select(PriceCategory.id))).first():
+                return
+            for i, (kind, name, price) in enumerate(DEFAULT_PRICE_CATEGORIES):
+                session.add(PriceCategory(kind=kind, name=name, price=price, currency="TMT", sort=i))
+            await session.commit()
+    except Exception as e:
+        print(f"seed_price_categories: skipped ({e})", flush=True)
+

@@ -14,6 +14,7 @@ from app.config import settings
 from app.states import AddStates
 from app.keyboards import main_menu_kb
 from app.utils import parse_datetime_human, fmt_dt_human, now_tz, to_tz
+from app.handlers.income import ask_category
 
 log = logging.getLogger(__name__)
 
@@ -96,4 +97,5 @@ async def _save_new_item(message: Message, state: FSMContext, note: str) -> None
     await message.answer(
         f"Добавлено: [{item.id}] USERID={user_id}, USERNAME={username}, DUE={fmt_dt_human(dt)}{note_str}",
     )
+    await ask_category(message, "k", item.id)
 

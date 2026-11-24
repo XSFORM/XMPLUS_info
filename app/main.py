@@ -7,7 +7,7 @@ from aiogram.types import ErrorEvent
 
 from app.config import settings
 from app.bot import router, dealer_router, guest_router, set_bot_commands, is_dealer_mode
-from app.db import init_db, seed_default_dealers, seed_payment_methods
+from app.db import init_db, seed_default_dealers, seed_payment_methods, seed_price_categories
 from app.scheduler import start_scheduler
 
 from app.handlers.add import router as add_router
@@ -17,6 +17,7 @@ from app.handlers.payments import router as payments_router
 from app.handlers.backup import router as backup_router
 from app.handlers.routers import router as routers_router
 from app.handlers.services import router as services_router
+from app.handlers.income import router as income_router
 
 log = logging.getLogger(__name__)
 
@@ -63,6 +64,7 @@ async def main() -> None:
     if settings.BOT_MODE != "dealer":
         await seed_default_dealers()
         await seed_payment_methods()
+        await seed_price_categories()
 
     # Регистрируем команды бота (кнопка «меню» в Telegram)
     await set_bot_commands(bot)
@@ -81,6 +83,7 @@ async def main() -> None:
         router.include_router(backup_router)
         router.include_router(routers_router)
         router.include_router(services_router)
+        router.include_router(income_router)
 
     # Запускаем планировщик задач (проверка истечений)
     start_scheduler(bot)

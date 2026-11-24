@@ -15,6 +15,7 @@ from app.states import RenewStates, DeleteStates
 from app.keyboards import confirm_kb, choose_by_due_kb, main_menu_kb
 from app.utils import parse_datetime_human, fmt_dt_human, now_tz, to_tz, tz_offset_str
 from app.bot import _notify_fail
+from app.pricing import log_client_income
 
 
 log = logging.getLogger(__name__)
@@ -277,8 +278,11 @@ async def renew_confirm(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
         item_username = item.username
         await session.commit()
     await state.clear()
+    income = ""
+    if not dealer_code or dealer_code == MAIN_CODE:
+        income = await log_client_income(item, "key", f"Продление: USERID={item_user_id}")
     await cb.message.answer(
-        f"✅ Продлено: USERID={data['user_id']}, USERNAME={data['username']}\nНовая дата DUE={new_due_str}",
+        f"✅ Продлено: USERID={data['user_id']}, USERNAME={data['username']}\nНовая дата DUE={new_due_str}" + income,
     )
     # Начислить долг дилеру за продление и уведомить его
     if dealer_code and dealer_code != MAIN_CODE:

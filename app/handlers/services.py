@@ -15,6 +15,7 @@ from app.keyboards import main_menu_kb
 from app.states import ServiceAddStates, ServiceEditStates
 from app.utils import now_tz
 from app.bot import _trunc, split_text_chunks, send_pre_chunk
+from app.pricing import log_income, delete_income
 from app.services_util import (
     period_label, period_short, period_len_days, parse_period, next_due, fmt_amount,
     parse_amount_currency, parse_date_simple, days_left_text, svc_card, remind_days,
@@ -361,8 +362,11 @@ async def svc_paid(cb: CallbackQuery) -> None:
         await session.commit()
         await session.refresh(s)
     await cb.answer("Отмечено как оплачено")
+    txn_id = 0
+    if s.amount:
+        txn_id = await log_income("service", -s.amount, s.currency, f"Оплата: {s.name}") or 0
     kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="↩️ Отменить", callback_data=f"svc:undo:{svc_id}:{old.isoformat()}"),
+        InlineKeyboardButton(text="↩️ Отменить", callback_data=f"svc:undo:{svc_id}:{old.isoformat()}:{txn_id}"),
     ]])
     await cb.message.answer(
         f"✅ {s.name}: оплачено.\nСледующая оплата: {s.due_date.isoformat()} "
@@ -374,7 +378,10 @@ async def svc_paid(cb: CallbackQuery) -> None:
 @router.callback_query(F.data.startswith("svc:undo:"))
 async def svc_undo(cb: CallbackQuery) -> None:
     from datetime import date as _date
-    _, _, sid, old = cb.data.split(":")
+    parts = cb.data.split(":")
+    sid, old = parts[2], parts[3]
+    if len(parts) > 4 and parts[4] != "0":
+        await delete_income(int(parts[4]))
     async with SessionLocal() as session:
         s = await session.get(Service, int(sid))
         if not s:

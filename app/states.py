@@ -130,3 +130,13 @@ class ServiceAddStates(StatesGroup):
 
 class ServiceEditStates(StatesGroup):
     waiting_value = State()
+
+
+class PriceStates(StatesGroup):
+    waiting_custom = State()
+
+
+class CategoryStates(StatesGroup):
+    waiting_new = State()
+    waiting_name = State()
+    waiting_price = State()
