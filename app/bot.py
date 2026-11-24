@@ -131,6 +131,7 @@ BOT_COMMANDS_ADMIN = [
     BotCommand(command="edit", description="Редактировать ключ"),
     BotCommand(command="status", description="Статус бота"),
     BotCommand(command="backup", description="Бэкап базы данных"),
+    BotCommand(command="services", description="Сервисы (VPS, домены) — напоминания об оплате"),
     BotCommand(command="timezone", description="Показать/сменить локальное время (TZ)"),
     BotCommand(command="cancel", description="Отменить текущий ввод"),
     BotCommand(command="menu", description="Показать клавиатуру"),

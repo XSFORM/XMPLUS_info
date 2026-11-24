@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from typing import Optional
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from sqlalchemy import Integer, BigInteger, Float, Boolean, String, DateTime, select
+from sqlalchemy import Integer, BigInteger, Float, Boolean, String, Date, DateTime, select
 
 from app.config import settings
 
@@ -59,6 +59,28 @@ class RouterItem(Base):
     note: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, default="")
     notified_count: Mapped[int] = mapped_column(Integer, default=0)
     last_notified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class Service(Base):
+    """Регулярный платёжный сервис (VPS, VDS, домен и т.д.) с напоминаниями."""
+    __tablename__ = "services"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    # Период в месяцах: 1 — ежемесячно, 12 — ежегодно и т.д.
+    period_months: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    # Дата следующей оплаты
+    due_date: Mapped[date] = mapped_column(Date, nullable=False)
+    # «Якорный» день месяца — чтобы 31-е не съезжало на 28-е навсегда
+    billing_day: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    amount: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    currency: Mapped[str] = mapped_column(String(16), nullable=False, default="$")
+    url: Mapped[Optional[str]] = mapped_column(String(512), nullable=True, default="")
+    note: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, default="")
+    # Служебное: когда последний раз напоминали (YYYY-MM-DD), «напомнить завтра», последняя оплата
+    last_notified_on: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    snooze_date: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    last_paid_on: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
 
 
 class DealerOrder(Base):

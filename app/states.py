@@ -119,3 +119,14 @@ class RouterDeleteStates(StatesGroup):
     waiting_search = State()
 
 
+class ServiceAddStates(StatesGroup):
+    waiting_name = State()
+    waiting_period_custom = State()
+    waiting_due = State()
+    waiting_amount = State()
+    waiting_url = State()
+    waiting_note = State()
+
+
+class ServiceEditStates(StatesGroup):
+    waiting_value = State()

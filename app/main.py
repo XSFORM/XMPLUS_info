@@ -16,6 +16,7 @@ from app.handlers.dealers import router as dealers_router
 from app.handlers.payments import router as payments_router
 from app.handlers.backup import router as backup_router
 from app.handlers.routers import router as routers_router
+from app.handlers.services import router as services_router
 
 log = logging.getLogger(__name__)
 
@@ -79,6 +80,7 @@ async def main() -> None:
         router.include_router(payments_router)
         router.include_router(backup_router)
         router.include_router(routers_router)
+        router.include_router(services_router)
 
     # Запускаем планировщик задач (проверка истечений)
     start_scheduler(bot)

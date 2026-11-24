@@ -4,7 +4,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from aiogram import Bot
 
 from app.config import settings
-from app.jobs import check_expiries
+from app.jobs import check_expiries, check_services
 
 
 def start_scheduler(bot: Bot) -> AsyncIOScheduler:
@@ -18,6 +18,14 @@ def start_scheduler(bot: Bot) -> AsyncIOScheduler:
         minutes=settings.CHECK_INTERVAL_MINUTES,
         args=[bot],
         id="check_expiries",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        check_services,
+        "interval",
+        minutes=settings.CHECK_INTERVAL_MINUTES,
+        args=[bot],
+        id="check_services",
         replace_existing=True,
     )
     scheduler.start()

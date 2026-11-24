@@ -20,6 +20,9 @@ class Settings:
     NOTIFY_EVERY_MINUTES: int = int(os.getenv("NOTIFY_EVERY_MINUTES", "180"))
     MAX_NOTIFICATIONS: int = int(os.getenv("MAX_NOTIFICATIONS", "2"))
 
+    # Сервисы (VPS, домены): с какого часа (локальное время) слать напоминания
+    SERVICE_NOTIFY_HOUR: int = int(os.getenv("SERVICE_NOTIFY_HOUR", "10"))
+
     # Путь к коду внутри контейнера (монтируется через volume)
     PROJECT_DIR: str = os.getenv("PROJECT_DIR", "/app")
 
