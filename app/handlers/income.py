@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import csv
 import html
+import io
 import logging
 import re
 from collections import defaultdict
@@ -9,7 +11,7 @@ from datetime import datetime, timezone
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
 from sqlalchemy import select, update, func
 
 from app.db import (
@@ -23,7 +25,7 @@ from app.pricing import (
     fmt_money, log_client_income,
 )
 from app.services_util import period_len_days
-from app.bot import _trunc
+from app.bot import _trunc, split_text_chunks, send_pre_chunk
 
 log = logging.getLogger(__name__)
 
@@ -248,6 +250,11 @@ def _home_kb(month: str | None = None) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="✍️ Категории ключам", callback_data="inc:bulk:k"),
             InlineKeyboardButton(text="✍️ Категории роутерам", callback_data="inc:bulk:r"),
         ],
+        [
+            InlineKeyboardButton(text="👥 Кто сколько: ключи", callback_data="inc:who:k"),
+            InlineKeyboardButton(text="👥 Кто сколько: роутеры", callback_data="inc:who:r"),
+        ],
+        [InlineKeyboardButton(text="📥 Выгрузить всех в Excel (CSV)", callback_data="inc:csv")],
         [InlineKeyboardButton(text="🏷 Настроить категории и цены", callback_data="inc:cats")],
     ])
 
@@ -595,3 +602,100 @@ async def inc_cat_del_ok(cb: CallbackQuery) -> None:
     await cb.message.answer("🗑 Категория удалена.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="◀ К категориям", callback_data="inc:cats"),
     ]]))
+
+
+# ---------------------------------------------------------------------
+#   Кто сколько платит (для сверки с Excel)
+# ---------------------------------------------------------------------
+
+def _who_row(k: str, o, price: str) -> str:
+    if k == "k":
+        return (f"{str(o.user_id).rjust(5)} {_trunc(o.username or '', 9).ljust(9)} "
+                f"{_trunc(o.note or '', 13).ljust(13)} {price.rjust(6)}")
+    return f"{_trunc(o.client_name or '', 14).ljust(14)} {_trunc(o.note or '', 13).ljust(13)} {price.rjust(6)}"
+
+
+@router.callback_query(F.data.startswith("inc:who:"))
+async def inc_who(cb: CallbackQuery) -> None:
+    """Все активные клиенты, сгруппированные по цене: видно, кто сколько платит."""
+    await cb.answer()
+    k = cb.data.split(":")[2]
+    now = now_tz()
+    cats = await categories_map()
+    async with SessionLocal() as session:
+        if k == "k":
+            objs = (await session.execute(select(Item).where(Item.dealer == MAIN_CODE))).scalars().all()
+        else:
+            objs = (await session.execute(select(RouterItem))).scalars().all()
+    active = [o for o in objs if to_tz(o.due_date) > now]
+    expired_cnt = len(objs) - len(active)
+
+    groups: dict[tuple, list] = defaultdict(list)
+    for o in active:
+        p = price_of(o, cats)
+        if not p:
+            key = (2, 0.0, "Без категории", "")
+        elif p[2] == "своя цена":
+            key = (1, 0.0, "Своя цена", p[1])
+        else:
+            key = (0, -p[0], f"{p[2]} — {fmt_money(p[0], p[1])}", p[1])
+        groups[key].append((o, p))
+
+    title = "Ключи" if k == "k" else "Роутеры"
+    lines: list[str] = []
+    total: dict[str, float] = defaultdict(float)
+    for key in sorted(groups):
+        rows = groups[key]
+        rows.sort(key=lambda x: (-(x[1][0] if x[1] else 0),
+                                 (x[0].note or x[0].username or "") if k == "k" else x[0].client_name.lower()))
+        g_sum = sum(p[0] for _, p in rows if p)
+        cur = key[3] or DEFAULT_CURRENCY
+        total[cur] += g_sum
+        head = f"{key[2]} ({len(rows)} шт." + (f", {fmt_money(g_sum, cur)})" if key[0] != 2 else ")")
+        lines += ["", head]
+        for o, p in rows:
+            price = fmt_money(p[0], "").strip() if p else "?"
+            lines.append(_who_row(k, o, price))
+    lines += ["", "─" * 40, "Итого: " + (" • ".join(fmt_money(v, c) for c, v in total.items()) or "0")]
+    if expired_cnt:
+        lines.append(f"Просроченные (в итог не входят): {expired_cnt} шт.")
+    header = f"👥 {title}: кто сколько платит ({len(active)} активных)"
+    for ch in split_text_chunks(header, lines):
+        await send_pre_chunk(cb.message, ch)
+
+
+@router.callback_query(F.data == "inc:csv")
+async def inc_csv(cb: CallbackQuery) -> None:
+    """CSV со всеми своими ключами и роутерами (включая просроченные) — открыть в Excel и сверить."""
+    await cb.answer()
+    now = now_tz()
+    cats = await categories_map()
+    async with SessionLocal() as session:
+        items = (await session.execute(select(Item).where(Item.dealer == MAIN_CODE))).scalars().all()
+        routers = (await session.execute(select(RouterItem))).scalars().all()
+    buf = io.StringIO()
+    w = csv.writer(buf, delimiter=";")
+    w.writerow(["Тип", "USERID", "USERNAME", "Клиент", "Заметка", "Категория", "Цена", "Валюта", "До", "Статус"])
+    for kind, objs in (("Ключ", items), ("Роутер", routers)):
+        for o in sorted(objs, key=lambda x: x.due_date):
+            p = price_of(o, cats)
+            active = to_tz(o.due_date) > now
+            if kind == "Ключ":
+                uid, uname, client, note = o.user_id, o.username, o.note or "", ""
+            else:
+                uid, uname, client, note = "", "", o.client_name, o.note or ""
+            w.writerow([
+                kind, uid, uname, client, note,
+                p[2] if p else "не указана",
+                (f"{p[0]:g}".replace(".", ",") if p else ""),
+                p[1] if p else "",
+                fmt_dt_human(o.due_date),
+                "активен" if active else "просрочен",
+            ])
+    data = buf.getvalue().encode("utf-8-sig")  # BOM — чтобы Excel правильно показал кириллицу
+    fname = f"clients_{now.strftime('%Y-%m-%d')}.csv"
+    await cb.message.answer_document(
+        BufferedInputFile(data, filename=fname),
+        caption="📥 Все свои ключи и роутеры с ценами (включая просроченные). Открывается в Excel.",
+    )
+
